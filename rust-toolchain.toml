@@ -1,0 +1,5 @@
+# Plugins are Rust dylibs loaded into the app: they must be built by exactly
+# this compiler (Rust has no stable ABI). Change it deliberately, then rebuild
+# every plugin.
+[toolchain]
+channel = "1.98.1"

@@ -1,0 +1,278 @@
+#!/usr/bin/env bash
+# delight — build Delight plugins from their own project.
+#
+#   delight new <name> [--id <plugin id>]   create a plugin project in ./<name>
+#   delight build                           build the plugin in this directory
+#   delight install [--restart]             build it, install it into Delight (and restart it)
+#   delight restart                         restart Delight, reloading every plugin
+#   delight package                         build it and write a shareable .zip
+#   delight ide                             editor support (cargo check, rust-analyzer)
+#   delight sdk                             the SDK the installed Delight carries
+#   delight sdk clean                       remove cached kits of other SDKs
+#
+# A plugin must be compiled against the exact SDK build of the Delight that
+# loads it (Rust has no stable ABI). Delight.app carries the kit its SDK was
+# built from (Contents/Resources/sdk-kit.tar.gz); `delight build` builds the
+# plugin inside that kit and checks the result with the app's own loader.
+#
+# Which Delight: $DELIGHT_APP, else the app this script ships in, else
+# /Applications/Delight.app or ~/Applications/Delight.app.
+# Cache: $DELIGHT_CACHE (default ~/Library/Caches/Delight).
+set -euo pipefail
+
+die() { echo "delight: $*" >&2; exit 1; }
+say() { echo "delight: $*" >&2; }
+
+usage() { sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# Follows symlinks (macOS 12 has no realpath).
+resolve() {
+    local p=$1 t
+    while [[ -L $p ]]; do
+        t=$(readlink "$p")
+        if [[ $t == /* ]]; then p=$t; else p=$(dirname "$p")/$t; fi
+    done
+    echo "$p"
+}
+
+find_app() {
+    local self
+    self=$(cd "$(dirname "$(resolve "$0")")" && pwd)
+    if [[ -n ${DELIGHT_APP:-} ]]; then APP=$DELIGHT_APP
+    elif [[ $self == */Contents/Resources/bin ]]; then APP=${self%/Contents/Resources/bin}
+    elif [[ -d /Applications/Delight.app ]]; then APP=/Applications/Delight.app
+    elif [[ -d $HOME/Applications/Delight.app ]]; then APP=$HOME/Applications/Delight.app
+    else die "Delight.app not found — install it, or set DELIGHT_APP=/path/to/Delight.app"
+    fi
+    [[ -d $APP ]] || die "$APP not found"
+    APP=$(cd "$APP" && pwd)
+    BIN="$APP/Contents/MacOS/Delight"
+    [[ -x $BIN ]] || die "$APP isn't a Delight app"
+    [[ -f $APP/Contents/Resources/sdk-kit.tar.gz ]] || die "$APP has no SDK kit — it predates the delight CLI"
+}
+
+# The installed app's SDK, its kit unpacked in the cache, and its Rust.
+ensure_kit() {
+    find_app
+    BUILD_ID=$("$BIN" --sdk-build-id)
+    SDK=$(sed -E 's/^Delight SDK ([^ ]+) .*/\1/' <<<"$BUILD_ID")
+    local hash=${BUILD_ID##* }
+    CACHE_ROOT=${DELIGHT_CACHE:-$HOME/Library/Caches/Delight}
+    CACHE="$CACHE_ROOT/sdk/$SDK-${hash:0:8}"
+    KIT="$CACHE/kit"
+    if [[ ! -f $KIT/KIT.toml ]]; then
+        say "unpacking SDK $SDK from $APP"
+        rm -rf "$KIT" && mkdir -p "$KIT"
+        tar -xzf "$APP/Contents/Resources/sdk-kit.tar.gz" -C "$KIT"
+    fi
+    grep -qF "build_id = \"$BUILD_ID\"" "$KIT/KIT.toml" || die "the kit in $APP doesn't match its SDK ($BUILD_ID)"
+    TARGET=$(sed -n 's/^target = "\(.*\)"$/\1/p' "$KIT/KIT.toml")
+    CHANNEL=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$KIT/rust-toolchain.toml")
+    command -v rustup >/dev/null || die "rustup not found — install Rust from https://rustup.rs"
+    if ! rustup toolchain list | grep -q "^$CHANNEL"; then
+        say "installing Rust $CHANNEL (the SDK's compiler)"
+        rustup toolchain install "$CHANNEL" --profile minimal
+    fi
+}
+
+# The plugin project in the current directory.
+read_project() {
+    [[ -f Cargo.toml ]] || die "no Cargo.toml here — run this in a plugin project (\`delight new <name>\` makes one)"
+    PROJECT=$PWD
+    field() { awk -v key="$1" '/^\[package\]/ {p=1; next} /^\[/ {p=0} p && $1 == key { sub(/^[^"]*"/, ""); sub(/".*/, ""); print; exit }' Cargo.toml; }
+    PKG=$(field name)
+    VERSION=$(field version)
+    [[ -n $PKG ]] || die "Cargo.toml has no [package] name"
+    grep -Eq 'crate-type *= *\[ *"dylib" *\]' Cargo.toml || die "$PKG must be a dylib: add [lib] crate-type = [\"dylib\"] to Cargo.toml"
+    ! grep -q '^\[workspace\]' Cargo.toml || die "remove [workspace] from Cargo.toml — delight builds the plugin inside the SDK's workspace"
+    NAME=${PKG#delight-plugin-}
+    LIB="lib${PKG//-/_}.dylib"
+}
+
+cmd_build() {
+    read_project
+    ensure_kit
+    # A private copy of the kit per plugin (its own Cargo.lock), all sharing
+    # one target dir: GPUI is compiled once per SDK, not once per plugin.
+    local work="$CACHE/work/$PKG"
+    if [[ ! -f $work/KIT.toml ]]; then
+        rm -rf "$work" && mkdir -p "$work"
+        cp -R "$KIT/." "$work/"
+    fi
+    find "$work/plugins" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    ln -s "$PROJECT" "$work/plugins/$NAME"
+    [[ -d $CACHE/target/release ]] || say "first build for SDK $SDK compiles GPUI — a few minutes"
+    say "building $PKG with Delight SDK $SDK"
+    (cd "$work" && CARGO_TARGET_DIR="$CACHE/target" cargo build --release -p "$PKG")
+    OUT="$PROJECT/target/delight"
+    mkdir -p "$OUT"
+    rm -f "$OUT/$NAME.dylib"
+    cp "$CACHE/target/release/$LIB" "$OUT/$NAME.dylib"
+    if ! "$BIN" --check-plugin "$OUT/$NAME.dylib" >/dev/null; then
+        die "$APP won't load it (above). A dependency may have changed the SDK build: use the SDK's re-exports (delight_sdk::serde_json …) instead of your own copies of crates it has"
+    fi
+    say "built $OUT/$NAME.dylib — it loads in $APP"
+}
+
+plugin_dir() {
+    local settings="$HOME/Library/Application Support/Delight/settings.json" dir=""
+    [[ -f $settings ]] && dir=$(plutil -extract plugin_dir raw -o - "$settings" 2>/dev/null || true)
+    echo "${DELIGHT_PLUGIN_DIR:-${dir:-$HOME/Library/Application Support/Delight/plugins}}"
+}
+
+cmd_install() {
+    local restart=0
+    case ${1:-} in
+        --restart) restart=1 ;;
+        "") ;;
+        *) die "usage: delight install [--restart]" ;;
+    esac
+    cmd_build
+    local dest
+    dest=$(plugin_dir)
+    mkdir -p "$dest"
+    # Replace, never overwrite in place: macOS caches a loaded dylib's code
+    # signature per file, and rewriting it gets the app killed.
+    rm -f "$dest/$NAME.dylib"
+    cp "$OUT/$NAME.dylib" "$dest/$NAME.dylib"
+    if [[ $restart == 1 ]]; then
+        say "installed $dest/$NAME.dylib"
+        cmd_restart
+    else
+        say "installed $dest/$NAME.dylib — restart Delight to load it (delight restart)"
+    fi
+}
+
+# Plugins load at startup and are never unloaded, so a rebuilt one needs a
+# fresh process.
+cmd_restart() {
+    [[ -n ${APP:-} ]] || find_app
+    if pgrep -xq Delight; then
+        osascript -e 'quit app id "dev.delight.app"' >/dev/null 2>&1 || true
+        local i
+        for i in $(seq 50); do pgrep -xq Delight || break; sleep 0.1; done
+        pgrep -xq Delight && { pkill -x Delight || true; sleep 0.5; }
+    fi
+    open "$APP"
+    say "restarted $APP"
+}
+
+cmd_package() {
+    cmd_build
+    local stage zip="$OUT/$NAME-$VERSION-sdk$SDK-$TARGET.zip"
+    stage=$(mktemp -d "${TMPDIR:-/tmp}/delight-package.XXXXXX")
+    cp "$OUT/$NAME.dylib" "$stage/"
+    cat > "$stage/$NAME.plugin.toml" <<EOF
+package = "$PKG"
+version = "$VERSION"
+sdk_build_id = "$BUILD_ID"
+target = "$TARGET"
+EOF
+    rm -f "$zip"
+    (cd "$stage" && zip -q "$zip" "$NAME.dylib" "$NAME.plugin.toml")
+    rm -rf "$stage"
+    say "wrote $zip — for Delight with SDK $SDK on $TARGET"
+}
+
+cmd_ide() {
+    read_project
+    ensure_kit
+    local config=".cargo/config.toml" marker="# Written by \`delight ide\`"
+    if [[ -f $config ]] && ! grep -qF "$marker" "$config"; then
+        die "$config exists — add to it by hand: [patch.crates-io] delight-sdk = { path = \"$KIT/crates/sdk\" }, delight-gpui = { path = \"$KIT/crates/gpui-alias\" }"
+    fi
+    mkdir -p .cargo
+    cat > "$config" <<EOF
+$marker for Delight SDK $SDK: \`cargo check\` and rust-analyzer
+# resolve the SDK from its kit. Plugins that ship are built by \`delight build\`
+# (a plain \`cargo build\` here doesn't match any Delight). Rerun after
+# updating Delight.
+[patch.crates-io]
+delight-sdk = { path = "$KIT/crates/sdk" }
+delight-gpui = { path = "$KIT/crates/gpui-alias" }
+EOF
+    cp "$KIT/rust-toolchain.toml" rust-toolchain.toml
+    # The SDK's dependency versions, so the editor sees what `delight build` uses.
+    [[ -f Cargo.lock ]] || cp "$KIT/Cargo.lock" Cargo.lock
+    say "editor support set up for SDK $SDK ($config, rust-toolchain.toml)"
+}
+
+cmd_new() {
+    local name="" id=""
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            --id) id=${2:?--id needs a value}; shift 2 ;;
+            -*) die "unknown option $1" ;;
+            *) [[ -z $name ]] || die "one name only"; name=$1; shift ;;
+        esac
+    done
+    [[ -n $name ]] || die "usage: delight new <name> [--id <plugin id>]"
+    [[ $name =~ ^[a-z][a-z0-9-]*$ ]] || die "name: lowercase letters, digits and dashes, starting with a letter"
+    [[ ! -e $name ]] || die "$name already exists"
+    ensure_kit
+    id=${id:-local.$name}
+    local title
+    title=$(tr '-' ' ' <<<"$name" | awk '{ $1 = toupper(substr($1, 1, 1)) substr($1, 2); print }')
+    mkdir -p "$name/src"
+    cat > "$name/Cargo.toml" <<EOF
+[package]
+name = "delight-plugin-$name"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["dylib"]
+
+# Delight SDK $SDK. Build with \`delight build\` / \`delight install\`. Prefer the
+# SDK's re-exports (delight_sdk::serde_json, delight_sdk::gpui …) over your own
+# copies of crates it already has: a different version or feature set of one
+# changes the SDK build, and Delight won't load the plugin.
+[dependencies]
+delight-sdk = "=$SDK"
+gpui = { package = "delight-gpui", version = "=$SDK" }
+EOF
+    {
+        echo "//! $title — a Delight plugin with a custom GPUI view. \`delight install\`"
+        echo "//! builds it and installs it into Delight."
+        sed '/^\/\/!/d' "$KIT/examples/plugins/hello/src/lib.rs" |
+            sed "s/PluginManifest::new(\"example.hello\", \"Hello\")/PluginManifest::new(\"$id\", \"$title\")/"
+    } > "$name/src/lib.rs"
+    printf '/target\n' > "$name/.gitignore"
+    (cd "$name" && cmd_ide)
+    say "created $name/ (plugin id $id). Next: cd $name && delight install"
+}
+
+cmd_sdk() {
+    case ${1:-} in
+        "")
+            ensure_kit
+            echo "Delight: $APP"
+            echo "SDK:     $BUILD_ID"
+            echo "Kit:     $KIT"
+            echo "Rust:    $CHANNEL ($TARGET)"
+            ;;
+        clean)
+            ensure_kit
+            local dir
+            for dir in "$CACHE_ROOT"/sdk/*; do
+                [[ -d $dir && $dir != "$CACHE" ]] || continue
+                say "removing $dir"
+                rm -rf "$dir"
+            done
+            ;;
+        *) die "usage: delight sdk [clean]" ;;
+    esac
+}
+
+case ${1:-} in
+    new) shift; cmd_new "$@" ;;
+    build) cmd_build ;;
+    install) shift; cmd_install "$@" ;;
+    restart) cmd_restart ;;
+    package) cmd_package ;;
+    ide) cmd_ide ;;
+    sdk) shift; cmd_sdk "$@" ;;
+    -h | --help | help | "") usage ;;
+    *) die "unknown command $1 (see delight --help)" ;;
+esac

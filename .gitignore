@@ -1,0 +1,6 @@
+/target
+/dist
+# Your plugins: folders or symlinks to their repos. The placeholder keeps the
+# `plugins/*` workspace glob valid when there are none.
+/plugins/*
+!/plugins/.keep

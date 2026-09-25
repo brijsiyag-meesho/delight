@@ -1,0 +1,10 @@
+[package]
+name = "delight-gpui"
+description = "GPUI as re-exported by delight-sdk. Depend on it as `gpui = { package = \"delight-gpui\", … }` so GPUI's macros resolve to the shared copy."
+# Always the SDK's version (see crates/sdk/Cargo.toml).
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+delight-sdk.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "delight-plugin-panicky"
+description = "Test fixture: a Delight plugin that panics on purpose, to exercise the host's panic guards."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+delight-sdk.workspace = true
+gpui = { package = "delight-gpui", path = "../../gpui-alias" }

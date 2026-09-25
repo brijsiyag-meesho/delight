@@ -1,0 +1,14 @@
+[package]
+name = "delight-plugin-hello"
+description = "Minimal Delight plugin with a custom GPUI tool view. Template for new plugins."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+delight-sdk.workspace = true
+gpui = { package = "delight-gpui", path = "../../../crates/gpui-alias" }
