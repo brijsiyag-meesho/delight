@@ -6,8 +6,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+delight-sdk.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
+libloading.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true

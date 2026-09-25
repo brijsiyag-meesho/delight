@@ -1345,7 +1345,9 @@ name = "delight-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "delight-sdk",
  "dirs 5.0.1",
+ "libloading 0.8.9",
  "log",
  "security-framework",
  "serde",
