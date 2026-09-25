@@ -14,9 +14,10 @@
 //! * [`Plugin::settings_view`] — the tool's own Settings page, if it has one.
 //!   The [`Host`] stores its settings (JSON), data folder and secrets.
 //!
-//! The host is generic: it never draws tool-specific UI. The SDK's widgets
-//! and theme are the app's own native building blocks, so tool views can
-//! match it exactly.
+//! The host is generic: it never draws tool-specific UI. Tool views draw
+//! everything themselves with GPUI, in the colours and fonts of the host's
+//! [`Theme`]. The SDK is only this contract — no components — so it can stay
+//! frozen; Delight's own UI kit isn't part of it.
 //!
 //! Plugins outside the app are `dylib` crates that call [`export_plugin!`] and
 //! depend on GPUI only through this crate (see the `delight-gpui` alias
@@ -37,6 +38,7 @@ mod host;
 mod identity;
 mod manifest;
 mod plugin;
+mod theme;
 mod view;
 
 pub use gpui;
@@ -52,4 +54,5 @@ pub use host::*;
 pub use identity::*;
 pub use manifest::*;
 pub use plugin::*;
+pub use theme::*;
 pub use view::*;

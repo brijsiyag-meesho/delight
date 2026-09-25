@@ -3,8 +3,10 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui::{App, Global, SharedString};
+use gpui::{App, Global, SharedString, Window};
 use serde_json::Value;
+
+use crate::Theme;
 
 /// Services the app provides to plugins: storage and a few app-level
 /// effects. The host never interprets what a plugin stores.
@@ -29,6 +31,9 @@ pub trait Host {
     fn secret(&self, plugin_id: &str, key: &str, cx: &App) -> Option<String>;
     /// Stores a secret in the Keychain; an empty value removes it.
     fn set_secret(&self, plugin_id: &str, key: &str, value: String, cx: &mut App);
+    /// The colours and fonts to draw `window` with. Fetch it in `render`: it
+    /// follows the appearance, and Delight redraws when that changes.
+    fn theme(&self, window: &Window, cx: &App) -> Theme;
     /// Brief confirmation in the launcher's status bar.
     fn toast(&self, message: SharedString, cx: &mut App);
     fn open_settings(&self, plugin_id: &str, cx: &mut App);

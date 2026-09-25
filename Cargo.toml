@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/sdk",
     "crates/gpui-alias",
+    "crates/ui",
 ]
 
 [workspace.package]
@@ -15,19 +16,24 @@ license = "MIT"
 delight-sdk = { path = "crates/sdk" }
 delight-gpui = { path = "crates/gpui-alias" }
 delight-core = { path = "crates/core" }
+delight-ui = { path = "crates/ui" }
 anyhow = "=1.0.100"
 base64 = "=0.22.1"
 dirs = "=5.0.1"
 global-hotkey = "=0.8.0"
 gpui = "=0.2.2"
 hmac = "=0.12.1"
+# The versions GPUI links, for rasterising tool logos (see delight-ui badge).
+image = { version = "=0.25.10", default-features = false }
 libloading = "=0.8.9"
 log = "=0.4.33"
 regex = "=1.11.3"
+resvg = { version = "=0.45.1", default-features = false }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.145", features = ["preserve_order"] }
 shlex = "=1.3.0"
 sha2 = "=0.10.9"
+smallvec = "=1.16.1"
 tray-icon = "=0.25.1"
 unicode-segmentation = "=1.13.3"
 walkdir = "=2.5.0"
