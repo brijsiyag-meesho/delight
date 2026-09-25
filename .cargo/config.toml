@@ -1,0 +1,3 @@
+# The app and plugin dylibs share one copy of std with libdelight_sdk.dylib.
+[build]
+rustflags = ["-C", "prefer-dynamic"]

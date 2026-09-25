@@ -1,0 +1,48 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sdk",
+    "crates/gpui-alias",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+# All versions pinned exactly (supply-chain policy).
+[workspace.dependencies]
+delight-sdk = { path = "crates/sdk" }
+delight-gpui = { path = "crates/gpui-alias" }
+delight-core = { path = "crates/core" }
+anyhow = "=1.0.100"
+base64 = "=0.22.1"
+dirs = "=5.0.1"
+global-hotkey = "=0.8.0"
+gpui = "=0.2.2"
+hmac = "=0.12.1"
+libloading = "=0.8.9"
+log = "=0.4.33"
+regex = "=1.11.3"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.145", features = ["preserve_order"] }
+shlex = "=1.3.0"
+sha2 = "=0.10.9"
+tray-icon = "=0.25.1"
+unicode-segmentation = "=1.13.3"
+walkdir = "=2.5.0"
+yaml-rust2 = { version = "=0.13.0", default-features = false }
+objc = "=0.2.7"
+cocoa = "=0.26.0"
+raw-window-handle = "=0.6.2"
+
+# No LTO: it can't be combined with the shared libdelight_sdk.dylib.
+[profile.release]
+codegen-units = 1
+strip = true
+
+# The SDK kit: a plugin's crates.io dependency on the SDK resolves to this
+# workspace's copy, so it gets the exact build identity the app was built with.
+[patch.crates-io]
+delight-sdk = { path = "crates/sdk" }
+delight-gpui = { path = "crates/gpui-alias" }
