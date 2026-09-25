@@ -13,6 +13,5 @@ gpui = { package = "delight-gpui", path = "../gpui-alias" }
 image.workspace = true
 log.workspace = true
 resvg.workspace = true
-serde.workspace = true
 smallvec.workspace = true
 unicode-segmentation.workspace = true

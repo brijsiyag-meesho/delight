@@ -54,6 +54,9 @@ keymap! {
     SelectDocStart ["cmd-shift-up"] => select_doc_start,
     SelectDocEnd ["cmd-shift-down"] => select_doc_end,
     SelectAll ["cmd-a"] => select_all,
+    // Accepts the greyed completion; without one, Tab propagates (the
+    // launcher moves focus to the tool's fields).
+    AcceptCompletion ["tab"] => accept_completion,
     // Plain ↵ is left to the launcher (it runs the primary action).
     Newline ["shift-enter", "alt-enter"] => newline,
     Copy ["cmd-c"] => copy,

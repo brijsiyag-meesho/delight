@@ -34,6 +34,16 @@ pub trait Host {
     /// The colours and fonts to draw `window` with. Fetch it in `render`: it
     /// follows the appearance, and Delight redraws when that changes.
     fn theme(&self, window: &Window, cx: &App) -> Theme;
+    /// Remembers `text` in the input history (if the user keeps one): as the
+    /// input is typed, the launcher offers it as a completion, and accepting
+    /// it brings this plugin's tool up. Remember inputs worth coming back to
+    /// — a search query, not a pasted document. Inputs over 1729 characters
+    /// aren't kept.
+    fn remember_input(&self, plugin_id: &str, text: SharedString, cx: &mut App);
+    /// Replaces the launcher's input with `text` (undoable with ⌘Z) — e.g.
+    /// to chain tools: decode, then format the result. Detection runs again
+    /// on the new input.
+    fn set_input(&self, text: SharedString, cx: &mut App);
     /// Brief confirmation in the launcher's status bar.
     fn toast(&self, message: SharedString, cx: &mut App);
     fn open_settings(&self, plugin_id: &str, cx: &mut App);

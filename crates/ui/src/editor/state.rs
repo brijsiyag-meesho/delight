@@ -19,6 +19,8 @@ use crate::ActiveTheme;
 pub enum EditorEvent {
     /// The text changed.
     Changed,
+    /// The user accepted the completion (Tab); `Changed` follows.
+    CompletionAccepted,
     Focus,
     Blur,
 }
@@ -39,6 +41,8 @@ pub struct TextEditor {
     pub(super) focus_handle: FocusHandle,
     pub(super) content: String,
     pub(super) placeholder: SharedString,
+    /// Greyed text after the cursor that Tab inserts (see `set_completion`).
+    pub(super) completion: Option<SharedString>,
     pub(super) selected_range: Range<usize>,
     pub(super) selection_reversed: bool,
     /// Text an input method is still composing (underlined, not committed).
@@ -84,6 +88,7 @@ impl TextEditor {
             focus_handle,
             content: String::new(),
             placeholder: SharedString::default(),
+            completion: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -140,6 +145,24 @@ impl TextEditor {
         }
     }
 
+    /// Shows `completion` greyed after the text: how the input could go on
+    /// (e.g. a remembered input). Tab inserts it. It shows only while the
+    /// cursor is at the end with nothing selected, and any edit clears it:
+    /// set a fresh one on [`EditorEvent::Changed`].
+    pub fn set_completion(&mut self, completion: Option<SharedString>, cx: &mut Context<Self>) {
+        let completion = completion.filter(|c| !c.is_empty());
+        if completion != self.completion {
+            self.completion = completion;
+            cx.notify();
+        }
+    }
+
+    /// The completion, if it's showing now.
+    pub(super) fn visible_completion(&self) -> Option<SharedString> {
+        let at_end = self.selected_range.is_empty() && self.cursor() == self.content.len();
+        self.completion.clone().filter(|_| at_end && !self.content.is_empty() && self.marked_range.is_none())
+    }
+
     pub fn select_all_text(&mut self, cx: &mut Context<Self>) {
         self.selected_range = 0..self.content.len();
         self.selection_reversed = false;
@@ -182,6 +205,7 @@ impl TextEditor {
 
     /// After any change to the text.
     pub(super) fn changed(&mut self, cx: &mut Context<Self>) {
+        self.completion = None;
         self.goal_x = None;
         self.autoscroll = true;
         self.blink.update(cx, |b, cx| b.pause(cx));

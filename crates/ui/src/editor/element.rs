@@ -62,6 +62,8 @@ pub struct Prepaint {
     placeholder: bool,
     selections: Vec<PaintQuad>,
     cursor: Option<PaintQuad>,
+    /// The completion's first line, greyed, and where it starts.
+    ghost: Option<(Point<Pixels>, WrappedLine)>,
 }
 
 impl TextElement {
@@ -206,7 +208,16 @@ impl Element for TextElement {
             let inset = (lh - font_size * 1.2).max(px(0.)) / 2.;
             Some(fill(Bounds::new(bounds.origin + point(p.x, p.y + inset), size(px(2.), lh - inset * 2.)), self.cursor_color))
         });
-        Prepaint { lines: layout.lines, placeholder: empty, selections, cursor: cursor.flatten() }
+        // The completion continues the text where it ends (its first line; Tab
+        // inserts all of it). It isn't part of the layout, so clicks and IME
+        // offsets never land in it.
+        let ghost = editor.visible_completion().and_then(|completion| {
+            let first_line = completion.split('\n').next().unwrap_or_default().to_string();
+            let origin = position_for_offset(&layout, editor.content.len())?;
+            let (mut lines, _) = Self::shape(&self.font_family, &first_line, self.placeholder_color, font_size, lh, None, window);
+            Some((origin, lines.remove(0).wrapped))
+        });
+        Prepaint { lines: layout.lines, placeholder: empty, selections, cursor: cursor.flatten(), ghost }
     }
 
     fn paint(
@@ -229,6 +240,9 @@ impl Element for TextElement {
         }
         for line in &prepaint.lines {
             let _ = line.wrapped.paint(bounds.origin + point(px(0.), line.y), lh, TextAlign::Left, None, window, cx);
+        }
+        if let Some((origin, ghost)) = &prepaint.ghost {
+            let _ = ghost.paint(bounds.origin + *origin, lh, TextAlign::Left, None, window, cx);
         }
         let cursor_bounds = prepaint.cursor.as_ref().map(|q| q.bounds);
         let show_cursor = focus.is_focused(window) && window.is_window_active() && blink.read(cx).visible();

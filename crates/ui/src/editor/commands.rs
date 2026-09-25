@@ -172,6 +172,19 @@ impl TextEditor {
         self.select_all_text(cx);
     }
 
+    /// Tab: inserts the completion shown after the cursor; without one, the
+    /// key propagates.
+    pub(super) fn accept_completion(&mut self, _: &AcceptCompletion, _: &mut Window, cx: &mut Context<Self>) {
+        match self.visible_completion() {
+            Some(completion) => {
+                let end = self.content.len();
+                cx.emit(super::EditorEvent::CompletionAccepted);
+                self.replace(end..end, &completion, EditKind::Other, cx);
+            }
+            None => cx.propagate(),
+        }
+    }
+
     /// ⇧↵ / ⌥↵ in a multi-line editor, keeping the line's indentation. A
     /// single-line editor lets it propagate.
     pub(super) fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {

@@ -11,11 +11,9 @@ mod palette;
 use std::ops::Deref;
 
 use gpui::{App, Global, Hsla, SharedString, WindowAppearance};
-use serde::{Deserialize, Serialize};
 
 /// Light/dark preference; `System` follows the macOS appearance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
     #[default]
     System,
