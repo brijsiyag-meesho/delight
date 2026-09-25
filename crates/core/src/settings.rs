@@ -18,11 +18,18 @@ pub enum Appearance {
     Light,
 }
 
+/// ⌘⇧Space.
+pub const DEFAULT_LAUNCHER_SHORTCUT: &str = "cmd+shift+Space";
+
 /// Missing fields take their defaults, so the file only needs what changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub appearance: Appearance,
+    /// The system-wide shortcut that shows and hides the launcher, e.g.
+    /// `cmd+shift+Space` or `alt+KeyK` (modifiers `cmd`, `alt`, `ctrl`,
+    /// `shift`; keys as `global-hotkey` names them).
+    pub launcher_shortcut: String,
     /// Hide the launcher when it loses focus (Spotlight behaviour).
     pub hide_on_blur: bool,
     /// Hide the launcher after a copy action.
@@ -48,6 +55,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             appearance: Appearance::System,
+            launcher_shortcut: DEFAULT_LAUNCHER_SHORTCUT.to_string(),
             hide_on_blur: true,
             hide_after_copy: false,
             input_history: true,

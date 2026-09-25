@@ -3,24 +3,35 @@
 //! ⌘⇧Space opens a floating input; every tool is a plugin written against
 //! `delight-sdk` — built in, or a plugin file loaded from the plugins folder.
 
+mod boundary;
+mod hotkey;
+mod launcher;
 mod lifecycle;
 mod login;
 mod platform;
+mod state;
 mod tray;
 
 use delight_core::Settings;
 use futures::StreamExt;
-use gpui::{App, Application, Global};
+use futures::channel::mpsc::UnboundedReceiver;
+use global_hotkey::GlobalHotKeyManager;
+use gpui::{App, Application, Global, KeyBinding, actions};
 use tray_icon::TrayIcon;
 
+use crate::state::AppState;
 use crate::tray::TrayCommand;
 
-/// Keeps the menu bar icon alive for the life of the app.
-struct MenuBarIcon {
+actions!(delight, [Quit]);
+
+/// Keeps the menu bar icon and the global shortcut alive for the life of
+/// the app.
+struct Native {
     _icon: Option<TrayIcon>,
+    _hotkey: Option<GlobalHotKeyManager>,
 }
 
-impl Global for MenuBarIcon {}
+impl Global for Native {}
 
 fn main() {
     // Delight's warnings and errors on stderr; e.g. `DELIGHT_LOG=delight=debug`
@@ -36,26 +47,55 @@ fn main() {
     let settings = Settings::load();
     login::apply(settings.open_at_login);
 
-    Application::new().run(|cx: &mut App| {
+    Application::new().with_assets(delight_ui::Assets).run(move |cx: &mut App| {
         platform::set_accessory_app();
-        let icon = tray::create().map_err(|e| log::error!("menu bar icon unavailable: {e:#}")).ok();
-        cx.set_global(MenuBarIcon { _icon: icon });
+        delight_ui::init(cx, state::theme_mode(settings.appearance));
+        launcher::bind_keys(cx);
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.on_action(|_: &Quit, cx| lifecycle::quit(cx));
 
-        // Waits for menu clicks and handles each on the main thread.
-        let mut clicks = tray::clicks();
-        cx.spawn(async move |cx| {
-            while let Some(command) = clicks.next().await {
-                if cx.update(|cx| handle_menu_click(command, cx)).is_err() {
-                    break;
-                }
+        state::init(cx, settings);
+        match launcher::open(cx) {
+            Ok(handle) => cx.global_mut::<AppState>().launcher = Some(handle),
+            Err(e) => {
+                log::error!("opening the launcher window: {e:#}");
+                cx.quit();
+                return;
             }
-        })
-        .detach();
+        }
+
+        let shortcut = hotkey::register(&state::settings(cx).launcher_shortcut)
+            .map_err(|e| log::error!("no launcher shortcut: {e:#}"))
+            .ok();
+        let shortcut_label = shortcut.as_ref().map(|s| hotkey::label(s.hotkey)).unwrap_or_default();
+        let icon = tray::create(&shortcut_label).map_err(|e| log::error!("menu bar icon unavailable: {e:#}")).ok();
+        run_on_main_thread(cx, tray::clicks(), handle_menu_click);
+        let manager = shortcut.map(|shortcut| {
+            run_on_main_thread(cx, shortcut.presses, |(), cx| launcher::toggle(cx));
+            shortcut.manager
+        });
+        cx.set_global(Native { _icon: icon, _hotkey: manager });
+        cx.activate(true);
     });
+}
+
+/// Delivers each event from a background channel (menu clicks, shortcut
+/// presses) to `handle` on the main thread, where app code runs, as it
+/// arrives.
+fn run_on_main_thread<T: 'static>(cx: &mut App, mut events: UnboundedReceiver<T>, handle: fn(T, &mut App)) {
+    cx.spawn(async move |cx| {
+        while let Some(event) = events.next().await {
+            if cx.update(|cx| handle(event, cx)).is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 fn handle_menu_click(command: TrayCommand, cx: &mut App) {
     match command {
+        TrayCommand::Open => launcher::show(cx),
         TrayCommand::Restart => lifecycle::restart(cx),
         TrayCommand::Quit => lifecycle::quit(cx),
     }

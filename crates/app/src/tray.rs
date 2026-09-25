@@ -12,14 +12,18 @@ const ICON_PIXELS: u32 = 36;
 /// A menu item the user clicked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCommand {
+    Open,
     Restart,
     Quit,
 }
 
-/// Creates the menu bar icon. It stays in the menu bar while the returned
-/// value is alive.
-pub fn create() -> anyhow::Result<TrayIcon> {
+/// Creates the menu bar icon; `shortcut` is the launcher's shortcut as
+/// shown (e.g. `⇧⌘Space`). It stays in the menu bar while the returned value
+/// is alive.
+pub fn create(shortcut: &str) -> anyhow::Result<TrayIcon> {
     let menu = Menu::with_items(&[
+        &MenuItem::with_id("open", format!("Open Delight          {shortcut}"), true, None),
+        &PredefinedMenuItem::separator(),
         &MenuItem::with_id("restart", "Restart Delight", true, None),
         &PredefinedMenuItem::separator(),
         &MenuItem::with_id("quit", "Quit Delight", true, None),
@@ -39,6 +43,7 @@ pub fn clicks() -> UnboundedReceiver<TrayCommand> {
     let (sender, receiver) = mpsc::unbounded();
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         let command = match event.id.0.as_str() {
+            "open" => TrayCommand::Open,
             "restart" => TrayCommand::Restart,
             "quit" => TrayCommand::Quit,
             _ => return,

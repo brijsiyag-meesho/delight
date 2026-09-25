@@ -8,6 +8,7 @@ use delight_sdk::{OperationSpec, Plugin, PluginManifest};
 
 use crate::guard::GuardedPlugin;
 use crate::native;
+use crate::plugin_store::valid_plugin_id;
 
 /// Where a plugin came from — shown in Settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,22 +56,25 @@ impl Registry {
 
     /// Registers a plugin behind panic guards. A later plugin with the same
     /// id replaces the earlier one, so plugins can override built-ins. A
-    /// plugin whose manifest panics becomes a load error.
+    /// plugin whose manifest panics, or whose id can't name its storage
+    /// (see [`valid_plugin_id`]), becomes a load error.
     pub fn register(&mut self, plugin: Arc<dyn Plugin>, source: PluginSource) {
+        let name = match &source {
+            PluginSource::Builtin => "built-in".to_string(),
+            PluginSource::Installed { path } => path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        };
         let plugin = match GuardedPlugin::new(plugin) {
             Ok(plugin) => plugin,
             Err(message) => {
-                let name = match &source {
-                    PluginSource::Builtin => "built-in".to_string(),
-                    PluginSource::Installed { path } => {
-                        path.file_name().unwrap_or_default().to_string_lossy().into_owned()
-                    }
-                };
                 self.load_errors.push(format!("{name}: panicked while loading: {message}"));
                 return;
             }
         };
         let id = plugin.manifest().id.clone();
+        if !valid_plugin_id(&id) {
+            self.load_errors.push(format!("{name}: invalid plugin id {id:?} (use letters, digits, `.`, `-`, `_`)"));
+            return;
+        }
         self.plugins.retain(|p| p.manifest().id != id);
         self.plugins.push(LoadedPlugin { plugin: Arc::new(plugin), source });
     }
@@ -106,6 +110,14 @@ mod tests {
         let (plugin, op) = registry.operation("acme.x", "new").expect("the replacement's operation");
         assert_eq!((plugin.source.clone(), op.title.as_str()), (PluginSource::Installed { path }, "NEW"));
         assert!(registry.operation("acme.x", "old").is_none());
+    }
+
+    #[test]
+    fn an_invalid_id_is_a_load_error() {
+        let mut registry = Registry::new();
+        registry.register(Arc::new(TestPlugin::new("../escape", "op")), PluginSource::Builtin);
+        assert!(registry.plugins().is_empty());
+        assert!(registry.load_errors[0].contains("invalid plugin id"), "{:?}", registry.load_errors);
     }
 
     #[test]

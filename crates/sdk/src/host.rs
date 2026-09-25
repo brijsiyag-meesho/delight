@@ -25,8 +25,8 @@ pub trait Host {
     /// [`Value::Null`] removes them.
     fn set_settings(&self, plugin_id: &str, value: Value, cx: &mut App);
     /// The plugin's own folder for any other data, created on first use and
-    /// deleted with the plugin.
-    fn data_dir(&self, plugin_id: &str, cx: &App) -> PathBuf;
+    /// deleted with the plugin. Fails only if the folder can't be created.
+    fn data_dir(&self, plugin_id: &str, cx: &App) -> std::io::Result<PathBuf>;
     /// A secret from the Keychain (e.g. an API token); `None` if unset.
     fn secret(&self, plugin_id: &str, key: &str, cx: &App) -> Option<String>;
     /// Stores a secret in the Keychain; an empty value removes it.

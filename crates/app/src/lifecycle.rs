@@ -4,8 +4,10 @@
 use delight_core::Settings;
 use gpui::App;
 
-/// A clean exit: the next launch shows no crash note.
+/// A clean exit: the input is kept for the next launch (if the history is
+/// on), and the next launch shows no crash note.
 pub fn quit(cx: &mut App) {
+    crate::launcher::hide(cx);
     delight_core::guard::clear_crash_note();
     cx.quit();
 }
@@ -14,6 +16,7 @@ pub fn quit(cx: &mut App) {
 /// does it as for Zed: it quits, waits until this process has exited, then
 /// opens the app again.
 pub fn restart(cx: &mut App) {
+    crate::launcher::hide(cx);
     delight_core::guard::clear_crash_note();
     cx.restart();
 }
