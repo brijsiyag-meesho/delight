@@ -1,10 +1,10 @@
-//! What each key does ([`super::keymap`]), and the mouse. Every edit goes
+//! What each action ([`super::actions`]) and the mouse do. Every edit goes
 //! through `replace`, every cursor move through `move_to` / `select_to`.
 
 use gpui::{ClipboardItem, Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Window};
 
 use super::history::EditKind;
-use super::keymap::*;
+use super::actions::*;
 use super::{TextEditor, text};
 
 impl TextEditor {
@@ -51,31 +51,26 @@ impl TextEditor {
         }
     }
 
-    /// At the start with nothing selected, ← propagates (the launcher uses it
-    /// to switch the tool's mode); likewise → at the end.
     pub(super) fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
         self.goal_x = None;
-        if !self.selected_range.is_empty() {
-            self.move_to(self.selected_range.start, cx);
-        } else if self.cursor() == 0 {
-            cx.propagate();
+        let target = if self.selected_range.is_empty() {
+            text::prev_grapheme(&self.content, self.cursor())
         } else {
-            self.move_to(text::prev_grapheme(&self.content, self.cursor()), cx);
-        }
+            self.selected_range.start
+        };
+        self.move_to(target, cx);
     }
 
     pub(super) fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
         self.goal_x = None;
-        if !self.selected_range.is_empty() {
-            self.move_to(self.selected_range.end, cx);
-        } else if self.cursor() == self.content.len() {
-            cx.propagate();
+        let target = if self.selected_range.is_empty() {
+            text::next_grapheme(&self.content, self.cursor())
         } else {
-            self.move_to(text::next_grapheme(&self.content, self.cursor()), cx);
-        }
+            self.selected_range.end
+        };
+        self.move_to(target, cx);
     }
 
-    /// ↑ on the first row propagates (the launcher moves between tools).
     pub(super) fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
         self.move_vertically(false, cx);
     }
@@ -84,15 +79,14 @@ impl TextEditor {
         self.move_vertically(true, cx);
     }
 
+    /// One row up or down; past the first / last row, to the start / end
+    /// (as in macOS text fields).
     fn move_vertically(&mut self, down: bool, cx: &mut Context<Self>) {
-        match self.vertical(self.cursor(), down) {
-            Some(offset) => {
-                let goal = self.goal_x;
-                self.move_to(offset, cx);
-                self.goal_x = goal;
-            }
-            None => cx.propagate(),
-        }
+        let edge = if down { self.content.len() } else { 0 };
+        let target = self.vertical(self.cursor(), down).unwrap_or(edge);
+        let goal = self.goal_x;
+        self.move_to(target, cx);
+        self.goal_x = goal;
     }
 
     pub(super) fn word_left(&mut self, _: &WordLeft, _: &mut Window, cx: &mut Context<Self>) {
@@ -172,24 +166,20 @@ impl TextEditor {
         self.select_all_text(cx);
     }
 
-    /// Tab: inserts the completion shown after the cursor; without one, the
-    /// key propagates.
+    /// Inserts the completion shown after the cursor (bound only while one
+    /// shows: `Editor && showing_completion`).
     pub(super) fn accept_completion(&mut self, _: &AcceptCompletion, _: &mut Window, cx: &mut Context<Self>) {
-        match self.visible_completion() {
-            Some(completion) => {
-                let end = self.content.len();
-                cx.emit(super::EditorEvent::CompletionAccepted);
-                self.replace(end..end, &completion, EditKind::Other, cx);
-            }
-            None => cx.propagate(),
+        if let Some(completion) = self.visible_completion() {
+            let end = self.content.len();
+            cx.emit(super::EditorEvent::CompletionAccepted);
+            self.replace(end..end, &completion, EditKind::Other, cx);
         }
     }
 
-    /// ⇧↵ / ⌥↵ in a multi-line editor, keeping the line's indentation. A
-    /// single-line editor lets it propagate.
+    /// A new line keeping the line's indentation (bound only in a multi-line
+    /// editor: `Editor && multiline`).
     pub(super) fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
         if !self.multiline {
-            cx.propagate();
             return;
         }
         let start = text::line_start(&self.content, self.cursor());

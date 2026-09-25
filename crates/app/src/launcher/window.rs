@@ -109,6 +109,24 @@ pub fn toast(cx: &mut App, message: SharedString) {
     }
 }
 
+/// Asks the tools again (e.g. a plugin was turned on or off).
+pub fn refresh(cx: &mut App) {
+    if let Some(handle) = handle(cx) {
+        let _ = handle.update(cx, |launcher, _, cx| launcher.classify(cx));
+    }
+}
+
+/// The plugins were loaded again: drops the views of the old ones and asks
+/// the new ones.
+pub fn plugins_reloaded(cx: &mut App) {
+    if let Some(handle) = handle(cx) {
+        let _ = handle.update(cx, |launcher, _, cx| {
+            launcher.views.clear();
+            launcher.classify(cx);
+        });
+    }
+}
+
 /// Replaces the input (for plugins, through the host).
 pub fn set_input(cx: &mut App, text: SharedString) {
     if let Some(handle) = handle(cx) {

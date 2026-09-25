@@ -26,7 +26,10 @@ pub enum ThemeMode {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub sdk: delight_sdk::Theme,
-    /// Tint painted over the vibrancy (NSVisualEffectView) background.
+    /// The launcher's background, painted over its native blur or glass.
+    /// It's mostly opaque, so the theme — not what's behind the window —
+    /// decides the contrast (as in Zed, where the theme paints every
+    /// background).
     pub window_tint: Hsla,
     /// The launcher's input: Lilex (Zed's editor font), bundled.
     pub input_font: SharedString,

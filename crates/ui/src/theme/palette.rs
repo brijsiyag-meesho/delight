@@ -42,7 +42,7 @@ impl Theme {
         (x.property, x.function, x.type_) = (c(0x0B4F79), c(0x326D74), c(0x3900A0));
         (x.constant, x.punctuation) = (c(0x9B2393), gray(0., 0.5));
 
-        Self::build(false, k, p, x, 0.12, mono_font, gray(0.98, 0.72))
+        Self::build(false, k, p, x, 0.12, mono_font, gray(0.97, 0.86))
     }
 
     pub fn dark(mono_font: SharedString) -> Self {
@@ -64,7 +64,7 @@ impl Theme {
         (x.property, x.function, x.type_) = (c(0x67B7A4), c(0xA167E6), c(0x5DD8FF));
         (x.constant, x.punctuation) = (c(0xFC5FA3), gray(1., 0.55));
 
-        Self::build(true, k, p, x, 0.18, mono_font, gray(0.12, 0.62))
+        Self::build(true, k, p, x, 0.18, mono_font, gray(0.13, 0.88))
     }
 
     /// The parts both appearances share: status tints from the palette, type

@@ -3,6 +3,8 @@
 use anyhow::Context;
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use resvg::{tiny_skia, usvg};
+use gpui::Keystroke;
+use tray_icon::menu::accelerator::Accelerator;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -13,28 +15,52 @@ const ICON_PIXELS: u32 = 36;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayCommand {
     Open,
+    Settings,
     Restart,
     Quit,
 }
 
-/// Creates the menu bar icon; `shortcut` is the launcher's shortcut as
-/// shown (e.g. `⇧⌘Space`). It stays in the menu bar while the returned value
-/// is alive.
-pub fn create(shortcut: &str) -> anyhow::Result<TrayIcon> {
-    let menu = Menu::with_items(&[
-        &MenuItem::with_id("open", format!("Open Delight          {shortcut}"), true, None),
-        &PredefinedMenuItem::separator(),
-        &MenuItem::with_id("restart", "Restart Delight", true, None),
-        &PredefinedMenuItem::separator(),
-        &MenuItem::with_id("quit", "Quit Delight", true, None),
-    ])?;
-    let icon = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_icon(icon()?)
-        .with_icon_as_template(true)
-        .with_tooltip("Delight")
-        .build()?;
-    Ok(icon)
+/// The menu bar icon, a GPUI global: it stays in the menu bar while this
+/// value is alive.
+pub struct Tray {
+    _icon: TrayIcon,
+    open: MenuItem,
+}
+
+impl gpui::Global for Tray {}
+
+impl Tray {
+    /// `shortcut`: the launcher's shortcut, shown next to "Open Delight".
+    pub fn new(shortcut: Option<&Keystroke>) -> anyhow::Result<Self> {
+        let open = MenuItem::with_id("open", "Open Delight", true, shortcut.and_then(accelerator));
+        let menu = Menu::with_items(&[
+            &open,
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id("settings", "Settings…", true, None),
+            &MenuItem::with_id("restart", "Restart Delight", true, None),
+            &PredefinedMenuItem::separator(),
+            &MenuItem::with_id("quit", "Quit Delight", true, None),
+        ])?;
+        let icon = TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_icon(icon()?)
+            .with_icon_as_template(true)
+            .with_tooltip("Delight")
+            .build()?;
+        Ok(Self { _icon: icon, open })
+    }
+
+    /// Shows the launcher's new shortcut next to "Open Delight".
+    pub fn set_shortcut(&self, shortcut: &Keystroke) {
+        if let Err(e) = self.open.set_accelerator(accelerator(shortcut)) {
+            log::warn!("menu bar shortcut: {e}");
+        }
+    }
+}
+
+/// The shortcut as the menu writes it (macOS draws it right-aligned).
+fn accelerator(keystroke: &Keystroke) -> Option<Accelerator> {
+    crate::hotkey::plus_separated(keystroke).parse().ok()
 }
 
 /// Menu clicks, as they happen: a stream to `.await` on, so nothing runs
@@ -44,6 +70,7 @@ pub fn clicks() -> UnboundedReceiver<TrayCommand> {
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
         let command = match event.id.0.as_str() {
             "open" => TrayCommand::Open,
+            "settings" => TrayCommand::Settings,
             "restart" => TrayCommand::Restart,
             "quit" => TrayCommand::Quit,
             _ => return,

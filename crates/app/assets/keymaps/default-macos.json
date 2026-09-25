@@ -1,0 +1,131 @@
+// Delight's key bindings, as in Zed's keymaps. Each section binds keystrokes
+// to actions within a key context; a key goes to the innermost focused
+// context that binds it, so the same key can mean different things:
+//
+//   Launcher > Editor     the input has focus
+//   Launcher > ToolList   the tool list has focus
+//   Settings              the Settings window
+//   (no context)          anywhere in Delight
+//
+// A context can test flags, e.g. `Editor && end_of_input`. Within one
+// context the later binding wins, and keymap.json (Settings → General →
+// Keyboard shortcuts) comes after this file: bind a key there to another
+// action, or to null to turn it off.
+[
+  {
+    "bindings": {
+      "cmd-q": "delight::Quit"
+    }
+  },
+  {
+    // Text editing, wherever an input has focus.
+    "context": "Editor",
+    "bindings": {
+      "backspace": "editor::Backspace",
+      "shift-backspace": "editor::Backspace",
+      "delete": "editor::Delete",
+      "alt-backspace": "editor::DeleteWordLeft",
+      "cmd-backspace": "editor::DeleteToLineStart",
+      "left": "editor::Left",
+      "right": "editor::Right",
+      "up": "editor::Up",
+      "down": "editor::Down",
+      "ctrl-p": "editor::Up",
+      "ctrl-n": "editor::Down",
+      "alt-left": "editor::WordLeft",
+      "alt-right": "editor::WordRight",
+      "cmd-left": "editor::LineStart",
+      "home": "editor::LineStart",
+      "ctrl-a": "editor::LineStart",
+      "cmd-right": "editor::LineEnd",
+      "end": "editor::LineEnd",
+      "ctrl-e": "editor::LineEnd",
+      "cmd-up": "editor::DocStart",
+      "cmd-down": "editor::DocEnd",
+      "shift-left": "editor::SelectLeft",
+      "shift-right": "editor::SelectRight",
+      "shift-up": "editor::SelectUp",
+      "shift-down": "editor::SelectDown",
+      "alt-shift-left": "editor::SelectWordLeft",
+      "alt-shift-right": "editor::SelectWordRight",
+      "cmd-shift-left": "editor::SelectLineStart",
+      "cmd-shift-right": "editor::SelectLineEnd",
+      "cmd-shift-up": "editor::SelectDocStart",
+      "cmd-shift-down": "editor::SelectDocEnd",
+      "cmd-a": "editor::SelectAll",
+      "cmd-c": "editor::Copy",
+      "cmd-x": "editor::Cut",
+      "cmd-v": "editor::Paste",
+      "cmd-z": "editor::Undo",
+      "cmd-shift-z": "editor::Redo",
+      "ctrl-cmd-space": "editor::ShowCharacterPalette"
+    }
+  },
+  {
+    "context": "Editor && multiline",
+    "bindings": {
+      "shift-enter": "editor::Newline",
+      "alt-enter": "editor::Newline"
+    }
+  },
+  {
+    "context": "Editor && showing_completion",
+    "bindings": {
+      "tab": "editor::AcceptCompletion"
+    }
+  },
+  {
+    "context": "Launcher",
+    "bindings": {
+      "escape": "launcher::Dismiss",
+      "cmd-k": "launcher::ClearInput",
+      "cmd-,": "launcher::OpenSettings",
+      "tab": "launcher::FocusNext",
+      "shift-tab": "launcher::FocusPrevious",
+      // The footer's actions: 1 is the primary one.
+      "enter": ["launcher::RunAction", 1],
+      "alt-2": ["launcher::RunAction", 2],
+      "alt-3": ["launcher::RunAction", 3],
+      "alt-4": ["launcher::RunAction", 4],
+      "alt-5": ["launcher::RunAction", 5],
+      "alt-6": ["launcher::RunAction", 6],
+      "alt-7": ["launcher::RunAction", 7],
+      "alt-8": ["launcher::RunAction", 8],
+      "alt-9": ["launcher::RunAction", 9],
+      // The nth tool in the list.
+      "cmd-1": ["launcher::SelectTool", 1],
+      "cmd-2": ["launcher::SelectTool", 2],
+      "cmd-3": ["launcher::SelectTool", 3],
+      "cmd-4": ["launcher::SelectTool", 4],
+      "cmd-5": ["launcher::SelectTool", 5],
+      "cmd-6": ["launcher::SelectTool", 6],
+      "cmd-7": ["launcher::SelectTool", 7],
+      "cmd-8": ["launcher::SelectTool", 8],
+      "cmd-9": ["launcher::SelectTool", 9]
+    }
+  },
+  {
+    // ↓ past the end of the input moves to the tool list.
+    "context": "Launcher > Editor && end_of_input",
+    "bindings": {
+      "down": "launcher::FocusTools"
+    }
+  },
+  {
+    // ↑ on the first tool goes back to the input.
+    "context": "ToolList",
+    "bindings": {
+      "up": "launcher::SelectPrevious",
+      "down": "launcher::SelectNext",
+      "ctrl-p": "launcher::SelectPrevious",
+      "ctrl-n": "launcher::SelectNext"
+    }
+  },
+  {
+    "context": "Settings",
+    "bindings": {
+      "cmd-w": "settings_window::CloseSettings",
+      "escape": "settings_window::CloseSettings"
+    }
+  }
+]

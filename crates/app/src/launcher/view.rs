@@ -3,7 +3,7 @@
 
 use delight_ui::{
     ActiveTheme, Button, Caption, Divider, Icon, IconButton, IconName, Keycap, KeycapStyle, LogoBadge, Theme, h_flex,
-    v_flex,
+    keystroke_label, v_flex,
 };
 use gpui::{
     AnyElement, Context, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement, Render, Styled, Window, div,
@@ -12,17 +12,15 @@ use gpui::{
 
 use super::footer::ActionKey;
 use super::{
-    BAR_HEIGHT, BAR_ICON_GAP, BAR_ICON_SIZE, BAR_PADDING_X, CONTEXT, ClearInput, Dismiss, Launcher, RunAltAction, RunPrimaryAction, SelectNext, SelectPrevious,
-    SelectTool, hide,
+    BAR_HEIGHT, BAR_ICON_GAP, BAR_ICON_SIZE, BAR_PADDING_X, CONTEXT, ClearInput, Dismiss, FocusNext, FocusPrevious,
+    FocusTools, Launcher, OpenSettings, RunAction, SelectNext, SelectPrevious, SelectTool, TOOL_LIST_CONTEXT, hide,
 };
 use delight_ui::theme::INPUT_LINE_HEIGHT;
 
 use crate::boundary::PanicBoundary;
-use crate::platform;
+use crate::{platform, settings_window};
 
 const LIST_WIDTH: f32 = 200.;
-/// ⌘1…⌘9.
-const NUMBERED_TOOLS: usize = 9;
 
 impl Focusable for Launcher {
     fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
@@ -41,27 +39,35 @@ impl Render for Launcher {
             .size_full()
             .overflow_hidden()
             .rounded(px(self.corner_radius()))
+            // The theme's background decides the contrast; the native glass
+            // or blur underneath adds the blur, and glass its shadow.
+            .bg(t.window_tint)
             .border_1()
-            .map(|root| {
-                if platform::uses_liquid_glass() {
-                    // On glass: no fill, and Spotlight's light rim.
-                    root.border_color(gpui::hsla(0., 0., 1., if t.dark { 0.2 } else { 0.6 }))
-                } else {
-                    root.border_color(k.border).bg(t.window_tint)
-                }
+            .border_color(if platform::uses_liquid_glass() {
+                // Spotlight's light rim.
+                gpui::hsla(0., 0., 1., if t.dark { 0.2 } else { 0.6 })
+            } else {
+                k.border
             })
             .font_family(t.text.ui_font.clone())
             .text_color(k.label)
             .text_size(t.text.size_base)
             .on_action(cx.listener(|_, _: &Dismiss, _, cx| cx.defer(hide)))
-            .on_action(cx.listener(|this, _: &RunPrimaryAction, _, cx| this.run_action_with_key(ActionKey::Enter, cx)))
-            .on_action(cx.listener(|this, RunAltAction(n): &RunAltAction, _, cx| {
-                this.run_action_with_key(ActionKey::Alt(*n), cx)
-            }))
-            .on_action(cx.listener(|this, _: &SelectPrevious, _, cx| this.select_previous(cx)))
-            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_next(cx)))
-            .on_action(cx.listener(|this, SelectTool(index): &SelectTool, _, cx| this.select(*index, cx)))
             .on_action(cx.listener(|this, _: &ClearInput, window, cx| this.clear_input(window, cx)))
+            .on_action(cx.listener(|_, _: &OpenSettings, _, cx| cx.defer(settings_window::open)))
+            .on_action(cx.listener(|_, _: &FocusNext, window, _| window.focus_next()))
+            .on_action(cx.listener(|_, _: &FocusPrevious, window, _| window.focus_prev()))
+            .on_action(cx.listener(|this, _: &FocusTools, window, cx| this.focus_tools(window, cx)))
+            .on_action(cx.listener(|this, _: &SelectPrevious, window, cx| this.select_previous(window, cx)))
+            .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_next(cx)))
+            .on_action(cx.listener(|this, SelectTool(n): &SelectTool, _, cx| {
+                if let Some(index) = n.checked_sub(1) {
+                    this.select(index, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, RunAction(n): &RunAction, window, cx| {
+                this.run_action(ActionKey::Numbered(*n), window, cx)
+            }))
             .on_key_down(cx.listener(Self::on_key_down))
             .child(self.render_bar(cx));
         if !self.is_expanded(cx) {
@@ -72,12 +78,12 @@ impl Render for Launcher {
                 h_flex()
                     .flex_1()
                     .min_h(px(0.))
-                    .child(self.render_list(&t, cx))
+                    .child(self.render_list(&t, window, cx))
                     .child(Divider::vertical())
                     .child(self.render_detail(&t, cx)),
             )
             .child(Divider::horizontal())
-            .child(self.render_footer(&t, cx))
+            .child(self.render_footer(&t, window, cx))
     }
 }
 
@@ -108,12 +114,18 @@ impl Launcher {
             })
     }
 
-    /// Suggested tools, then the other tools that fit less well.
-    fn render_list(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Suggested tools, then the other tools that fit less well. The
+    /// selection is the accent colour while the list has focus, grey
+    /// otherwise (as in macOS lists).
+    fn render_list(&self, t: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focused = self.list_focus.is_focused(window);
         let section = |label: &'static str| div().px(px(14.)).py(px(4.)).child(Caption::new(label));
         let suggested = self.candidates.iter().take_while(|c| c.suggested()).count();
         let mut list = v_flex()
             .id("tools")
+            .key_context(TOOL_LIST_CONTEXT)
+            .track_focus(&self.list_focus)
+            .on_key_down(cx.listener(Self::on_list_key_down))
             .w(px(LIST_WIDTH))
             .flex_shrink_0()
             .h_full()
@@ -132,7 +144,9 @@ impl Launcher {
                 list = list.child(div().mx(px(14.)).my(px(6.)).child(Divider::horizontal())).child(section("Other Tools"));
             }
             let selected = self.selected == Some(i);
+            let on_accent = selected && focused;
             let hover = t.colors.hover;
+            let keystroke = delight_ui::keystroke_for(&SelectTool(i + 1), window);
             list = list.child(
                 h_flex()
                     .id(("tool", i))
@@ -142,21 +156,25 @@ impl Launcher {
                     .gap(px(8.))
                     .rounded(t.metrics.radius_sm)
                     .cursor_pointer()
-                    .when(selected, |row| row.bg(t.colors.accent))
+                    .when(on_accent, |row| row.bg(t.colors.accent))
+                    .when(selected && !focused, |row| row.bg(t.colors.fill_strong))
                     .when(!selected, |row| row.hover(move |s| s.bg(hover)))
-                    .on_click(cx.listener(move |this, _, _, cx| this.select(i, cx)))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select(i, cx);
+                        window.focus(&this.list_focus);
+                    }))
                     .child(LogoBadge::new(candidate.icon_svg).size(px(20.)))
                     .child(
                         div()
                             .flex_1()
                             .min_w(px(0.))
-                            .text_color(if selected { t.colors.accent_text } else { t.colors.label })
+                            .text_color(if on_accent { t.colors.accent_text } else { t.colors.label })
                             .truncate()
                             .child(candidate.title.clone()),
                     )
-                    .when(i < NUMBERED_TOOLS, |row| {
-                        let style = if selected { KeycapStyle::OnAccent } else { KeycapStyle::Plain };
-                        row.child(Keycap::new(format!("⌘{}", i + 1)).style(style))
+                    .when_some(keystroke, |row, keystroke| {
+                        let style = if on_accent { KeycapStyle::OnAccent } else { KeycapStyle::Plain };
+                        row.child(Keycap::new(keystroke_label(&keystroke)).style(style))
                     }),
             );
         }
@@ -191,7 +209,14 @@ impl Launcher {
                     .text_color(t.colors.tertiary_label)
                     .truncate()
                     .child(candidate.plugin_name.clone()),
-            );
+            )
+            .when(self.has_settings(&candidate.plugin_id, cx), |header| {
+                let plugin_id = candidate.plugin_id.clone();
+                header.child(IconButton::new("tool-settings", IconName::Settings).on_click(move |_, _, cx| {
+                    let plugin_id = plugin_id.clone();
+                    cx.defer(move |cx| settings_window::open_plugin(cx, &plugin_id));
+                }))
+            });
         let pane = pane.child(header);
         // A crashed plugin is never called again: say so instead.
         if let Some(message) = self.crash_of(&candidate.plugin_id, cx) {
@@ -229,7 +254,7 @@ impl Launcher {
     }
 
     /// Input statistics (or a message), then the selected tool's actions.
-    fn render_footer(&self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_footer(&self, t: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let status: AnyElement = match &self.toast {
             Some(message) => h_flex()
                 .gap(px(6.))
@@ -251,17 +276,22 @@ impl Launcher {
         };
         // Buttons are clicked, not dragged: keep their mouse-downs from the footer.
         let mut actions = h_flex().gap(px(2.)).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
-        for (i, (action, key)) in self.keyed_actions(cx).into_iter().take(4).enumerate() {
+        for (i, (action, key)) in self.keyed_actions(window, cx).into_iter().take(4).enumerate() {
             if i > 0 {
                 actions = actions.child(Divider::vertical());
             }
-            let button = Button::new(("action", i), action.label.clone())
+            let mut button = Button::new(("action", i), action.label.clone())
                 .text()
-                .shortcut(key.label())
-                .emphasized(key == ActionKey::Enter)
+                .emphasized(key == ActionKey::Numbered(1))
                 .on_click(cx.listener(move |this, _, _, cx| this.perform(action.clone(), cx)));
+            if let Some(keystroke) = self.keystroke_for(&key, window) {
+                button = button.shortcut(keystroke_label(&keystroke));
+            }
             actions = actions.child(button);
         }
+        let actions = actions.child(
+            IconButton::new("settings", IconName::Settings).on_click(|_, _, cx| cx.defer(settings_window::open)),
+        );
         // The footer is a handle for moving the window.
         h_flex()
             .on_mouse_down(MouseButton::Left, |_, window, _| platform::drag_window(window))

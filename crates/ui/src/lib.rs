@@ -27,14 +27,13 @@ pub use button::{Button, ButtonVariant, IconButton};
 pub use editor::{EditorEvent, EditorFont, TextEditor};
 pub use group::{Caption, Divider, Group};
 pub use icon::Icon;
-pub use keycap::{Keycap, KeycapStyle};
+pub use keycap::{Keycap, KeycapStyle, keystroke_for, keystroke_keys, keystroke_label, modifier_keys};
 pub use segmented::SegmentedControl;
 pub use styled::{Disableable, Selectable, Sizable, Size, StyledExt, h_flex, v_flex};
 pub use switch::Switch;
 pub use theme::{ActiveTheme, Theme, ThemeMode};
 
-/// Resolves the theme (loading the bundled font) and binds the editor's keys.
+/// Resolves the theme (loading the bundled font).
 pub fn init(cx: &mut gpui::App, mode: ThemeMode) {
     theme::init(cx, mode);
-    editor::init(cx);
 }

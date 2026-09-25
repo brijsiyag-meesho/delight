@@ -16,7 +16,7 @@ mod mac {
     use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
     use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, Message, msg_send, sel};
     use objc2_app_kit::{
-        NSAnimatablePropertyContainer, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
+        NSAnimatablePropertyContainer, NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
         NSBezierPath, NSColor, NSGlassEffectView, NSImage, NSImageResizingMode, NSView, NSVisualEffectBlendingMode,
         NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
     };
@@ -48,6 +48,19 @@ mod mac {
         NSApplication::sharedApplication(mtm).setActivationPolicy(NSApplicationActivationPolicy::Accessory);
     }
 
+    /// Draws Delight's windows light (`Some(false)`), dark (`Some(true)`), or
+    /// as macOS does (`None`) — so native parts (the blur, the glass, the
+    /// title bar) match a theme chosen in Settings.
+    pub fn set_app_appearance(dark: Option<bool>) {
+        let Some(mtm) = main_thread() else { return };
+        // SAFETY: AppKit's appearance name constants.
+        let appearance = dark.and_then(|dark| {
+            let name = unsafe { if dark { NSAppearanceNameDarkAqua } else { NSAppearanceNameAqua } };
+            NSAppearance::appearanceNamed(name)
+        });
+        NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
+    }
+
     /// The material behind the launcher's content.
     enum Backdrop {
         /// Liquid Glass (macOS 26+), as Spotlight uses: its own translucent
@@ -62,16 +75,10 @@ mod mac {
         static BACKDROP: std::cell::RefCell<Option<Backdrop>> = const { std::cell::RefCell::new(None) };
     }
 
-    /// How strongly the glass is tinted: 0 is clear, 1 opaque.
-    const GLASS_TINT: f64 = 0.6;
-
     fn new_backdrop(mtm: MainThreadMarker, frame: NSRect) -> (Backdrop, Retained<NSView>) {
         // NSGlassEffectView exists only on macOS 26+.
         if AnyClass::get(c"NSGlassEffectView").is_some() {
             let glass = NSGlassEffectView::initWithFrame(NSGlassEffectView::alloc(mtm), frame);
-            // Frosted like Spotlight's field: tinted with the window colour
-            // (light or dark with the appearance), so what's behind is muted.
-            glass.setTintColor(Some(&NSColor::windowBackgroundColor().colorWithAlphaComponent(GLASS_TINT)));
             let view = Retained::clone(&glass).into_super();
             return (Backdrop::Glass(glass), view);
         }
@@ -83,8 +90,7 @@ mod mac {
         (Backdrop::Blur(blur), view)
     }
 
-    /// Whether the launcher sits on Liquid Glass, which draws its own fill
-    /// and rim (so the launcher draws neither).
+    /// Whether the launcher sits on Liquid Glass (it then draws a light rim).
     pub fn uses_liquid_glass() -> bool {
         BACKDROP.with_borrow(|backdrop| matches!(backdrop, Some(Backdrop::Glass(_))))
     }
@@ -324,6 +330,7 @@ mod other {
         true
     }
     pub fn patch_gpui_focus() {}
+    pub fn set_app_appearance(_: Option<bool>) {}
     pub fn uses_liquid_glass() -> bool {
         false
     }

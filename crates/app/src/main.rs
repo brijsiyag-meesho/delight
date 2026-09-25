@@ -5,33 +5,27 @@
 
 mod boundary;
 mod hotkey;
+mod install;
+mod keymap;
 mod launcher;
 mod lifecycle;
 mod login;
 mod platform;
+mod settings_window;
 mod state;
 mod tray;
 
 use delight_core::Settings;
+use delight_ui::ThemeMode;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
-use global_hotkey::GlobalHotKeyManager;
-use gpui::{App, Application, Global, KeyBinding, actions};
-use tray_icon::TrayIcon;
+use gpui::{App, Application, actions};
 
+use crate::hotkey::LauncherShortcut;
 use crate::state::AppState;
-use crate::tray::TrayCommand;
+use crate::tray::{Tray, TrayCommand};
 
 actions!(delight, [Quit]);
-
-/// Keeps the menu bar icon and the global shortcut alive for the life of
-/// the app.
-struct Native {
-    _icon: Option<TrayIcon>,
-    _hotkey: Option<GlobalHotKeyManager>,
-}
-
-impl Global for Native {}
 
 fn main() {
     // Delight's warnings and errors on stderr; e.g. `DELIGHT_LOG=delight=debug`
@@ -49,9 +43,8 @@ fn main() {
 
     Application::new().with_assets(delight_ui::Assets).run(move |cx: &mut App| {
         platform::set_accessory_app();
-        delight_ui::init(cx, state::theme_mode(settings.appearance));
-        launcher::bind_keys(cx);
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        delight_ui::init(cx, ThemeMode::System);
+        state::apply_appearance(cx, settings.appearance);
         cx.on_action(|_: &Quit, cx| lifecycle::quit(cx));
 
         state::init(cx, settings);
@@ -63,18 +56,25 @@ fn main() {
                 return;
             }
         }
+        // After the launcher: it shows what's wrong in keymap.json.
+        keymap::init(cx);
 
-        let shortcut = hotkey::register(&state::settings(cx).launcher_shortcut)
-            .map_err(|e| log::error!("no launcher shortcut: {e:#}"))
-            .ok();
-        let shortcut_label = shortcut.as_ref().map(|s| hotkey::label(s.hotkey)).unwrap_or_default();
-        let icon = tray::create(&shortcut_label).map_err(|e| log::error!("menu bar icon unavailable: {e:#}")).ok();
+        // The launcher shortcut and the menu bar icon are globals: they work
+        // while they're alive.
+        let mut keystroke = None;
+        match LauncherShortcut::register(&state::settings(cx).launcher_shortcut) {
+            Ok((shortcut, presses)) => {
+                keystroke = Some(shortcut.keystroke().clone());
+                cx.set_global(shortcut);
+                run_on_main_thread(cx, presses, |(), cx| launcher::toggle(cx));
+            }
+            Err(e) => log::error!("no launcher shortcut: {e:#}"),
+        }
+        match Tray::new(keystroke.as_ref()) {
+            Ok(tray) => cx.set_global(tray),
+            Err(e) => log::error!("menu bar icon unavailable: {e:#}"),
+        }
         run_on_main_thread(cx, tray::clicks(), handle_menu_click);
-        let manager = shortcut.map(|shortcut| {
-            run_on_main_thread(cx, shortcut.presses, |(), cx| launcher::toggle(cx));
-            shortcut.manager
-        });
-        cx.set_global(Native { _icon: icon, _hotkey: manager });
         cx.activate(true);
     });
 }
@@ -96,6 +96,7 @@ fn run_on_main_thread<T: 'static>(cx: &mut App, mut events: UnboundedReceiver<T>
 fn handle_menu_click(command: TrayCommand, cx: &mut App) {
     match command {
         TrayCommand::Open => launcher::show(cx),
+        TrayCommand::Settings => settings_window::open(cx),
         TrayCommand::Restart => lifecycle::restart(cx),
         TrayCommand::Quit => lifecycle::quit(cx),
     }

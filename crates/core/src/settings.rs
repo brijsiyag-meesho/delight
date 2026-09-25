@@ -19,16 +19,15 @@ pub enum Appearance {
 }
 
 /// ⌘⇧Space.
-pub const DEFAULT_LAUNCHER_SHORTCUT: &str = "cmd+shift+Space";
+pub const DEFAULT_LAUNCHER_SHORTCUT: &str = "cmd-shift-space";
 
 /// Missing fields take their defaults, so the file only needs what changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub appearance: Appearance,
-    /// The system-wide shortcut that shows and hides the launcher, e.g.
-    /// `cmd+shift+Space` or `alt+KeyK` (modifiers `cmd`, `alt`, `ctrl`,
-    /// `shift`; keys as `global-hotkey` names them).
+    /// The system-wide shortcut that shows and hides the launcher, written
+    /// like every key in Delight's keymaps: `cmd-shift-space`, `alt-k`.
     pub launcher_shortcut: String,
     /// Hide the launcher when it loses focus (Spotlight behaviour).
     pub hide_on_blur: bool,
@@ -71,6 +70,11 @@ impl Default for Settings {
 impl Settings {
     pub fn path() -> PathBuf {
         files::app_dir().join("settings.json")
+    }
+
+    /// The user's key bindings, over the app's default keymap.
+    pub fn keymap_path() -> PathBuf {
+        files::app_dir().join("keymap.json")
     }
 
     /// Written by the panic hook when Delight is about to die; shown and

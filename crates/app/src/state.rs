@@ -11,9 +11,15 @@ use delight_core::{InputHistory, PluginStore, Registry, Settings, secrets};
 use delight_sdk::{Host, HostHandle, Theme};
 use delight_core::settings::Appearance;
 use delight_ui::{ActiveTheme, ThemeMode};
-use gpui::{App, Global, SharedString, Window, WindowHandle};
+use gpui::{App, Global, Keystroke, SharedString, Window, WindowHandle};
 
+use anyhow::Context as _;
+use delight_core::registry::PluginSource;
+
+use crate::hotkey::LauncherShortcut;
 use crate::launcher::{self, Launcher};
+use crate::settings_window::{self, SettingsWindow};
+use crate::tray::Tray;
 
 pub struct AppState {
     pub settings: Settings,
@@ -21,6 +27,7 @@ pub struct AppState {
     pub plugin_store: PluginStore,
     pub input_history: InputHistory,
     pub launcher: Option<WindowHandle<Launcher>>,
+    pub settings_window: Option<WindowHandle<SettingsWindow>>,
     /// Keychain secrets read so far, by `(plugin id, key)`. Reading the
     /// Keychain is slow (and can ask for a password), so each is read once.
     /// A `RefCell` because plugins read secrets with a shared `&App`.
@@ -38,6 +45,7 @@ pub fn init(cx: &mut App, settings: Settings) {
         plugin_store: PluginStore::load(),
         input_history: InputHistory::load(),
         launcher: None,
+        settings_window: None,
         secrets: RefCell::default(),
     });
     cx.set_global(HostHandle(Rc::new(AppHost)));
@@ -55,18 +63,100 @@ fn load_plugins(settings: &Settings) -> Registry {
     registry
 }
 
-/// The saved appearance, as the UI kit's theme takes it. (Core stores it
-/// without depending on the UI kit, hence two enums.)
-pub fn theme_mode(appearance: Appearance) -> ThemeMode {
-    match appearance {
-        Appearance::System => ThemeMode::System,
-        Appearance::Dark => ThemeMode::Dark,
-        Appearance::Light => ThemeMode::Light,
-    }
+/// Applies the appearance setting: the UI kit's theme, and macOS's own
+/// drawing of Delight's windows (blur, glass, title bar), so both match.
+pub fn apply_appearance(cx: &mut App, appearance: Appearance) {
+    // Core stores the setting without depending on the UI kit: two enums.
+    let (mode, dark) = match appearance {
+        Appearance::System => (ThemeMode::System, None),
+        Appearance::Dark => (ThemeMode::Dark, Some(true)),
+        Appearance::Light => (ThemeMode::Light, Some(false)),
+    };
+    crate::platform::set_app_appearance(dark);
+    delight_ui::theme::set_mode(cx, mode);
 }
 
 pub fn settings(cx: &App) -> &Settings {
     &cx.global::<AppState>().settings
+}
+
+/// Changes Delight's settings, saves them, and applies what changed.
+pub fn update_settings(cx: &mut App, change: impl FnOnce(&mut Settings)) {
+    let state = cx.global_mut::<AppState>();
+    let before = state.settings.clone();
+    change(&mut state.settings);
+    let after = state.settings.clone();
+    if let Err(e) = after.save() {
+        log::error!("saving settings: {e:#}");
+    }
+    if after.appearance != before.appearance {
+        apply_appearance(cx, after.appearance);
+    }
+    if after.open_at_login != before.open_at_login {
+        crate::login::apply(after.open_at_login);
+    }
+    if before.input_history && !after.input_history
+        && let Err(e) = cx.global_mut::<AppState>().input_history.erase()
+    {
+        log::error!("erasing the input history: {e:#}");
+    }
+    if after.plugin_dir != before.plugin_dir {
+        reload_plugins(cx);
+    } else if after.disabled_plugins != before.disabled_plugins {
+        launcher::refresh(cx);
+    }
+    cx.refresh_windows();
+}
+
+/// Switches the launcher shortcut and saves it; the error says why it
+/// can't be used (invalid, or refused by macOS), and the old one stays.
+pub fn set_launcher_shortcut(cx: &mut App, keystroke: &Keystroke) -> anyhow::Result<()> {
+    anyhow::ensure!(cx.has_global::<LauncherShortcut>(), "the launcher shortcut isn't available");
+    cx.global_mut::<LauncherShortcut>().change(keystroke)?;
+    if let Some(tray) = cx.try_global::<Tray>() {
+        tray.set_shortcut(keystroke);
+    }
+    update_settings(cx, |s| s.launcher_shortcut = keystroke.unparse());
+    Ok(())
+}
+
+/// Loads the plugins folder again: newly installed plugins appear. (A
+/// plugin already loaded keeps its old code until Delight restarts: loaded
+/// libraries are never unloaded.)
+pub fn reload_plugins(cx: &mut App) {
+    let state = cx.global_mut::<AppState>();
+    state.registry = Arc::new(load_plugins(&state.settings));
+    launcher::plugins_reloaded(cx);
+    cx.refresh_windows();
+}
+
+/// Deletes an installed plugin: its file, its settings and data, its
+/// remembered inputs and its Keychain secrets. Its code stays loaded until
+/// Delight restarts, but it's gone from every list at once.
+pub fn delete_plugin(cx: &mut App, plugin_id: &str) -> anyhow::Result<()> {
+    let state = cx.global_mut::<AppState>();
+    let plugin = state.registry.get(plugin_id).with_context(|| format!("{plugin_id} isn't loaded"))?;
+    let PluginSource::Installed { path } = &plugin.source else {
+        anyhow::bail!("tools that come with Delight can be turned off, not deleted");
+    };
+    std::fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+    state.plugin_store.remove(plugin_id)?;
+    state.input_history.forget_plugin(plugin_id)?;
+    state.secrets.get_mut().retain(|(id, _), _| id != plugin_id);
+    let id = plugin_id.to_string();
+    cx.background_executor()
+        .spawn(async move {
+            if let Err(e) = secrets::forget_plugin(&id) {
+                log::error!("deleting {id}'s secrets: {e:#}");
+            }
+        })
+        .detach();
+    update_settings(cx, |s| {
+        s.disabled_plugins.remove(plugin_id);
+        s.crashed_plugins.remove(plugin_id);
+    });
+    reload_plugins(cx);
+    Ok(())
 }
 
 /// What plugins call (through `delight_sdk::host`).
@@ -133,7 +223,8 @@ impl Host for AppHost {
         launcher::toast(cx, message);
     }
 
-    fn open_settings(&self, _plugin_id: &str, _cx: &mut App) {
-        // The Settings window arrives in the next block.
+    fn open_settings(&self, plugin_id: &str, cx: &mut App) {
+        let plugin_id = plugin_id.to_string();
+        cx.defer(move |cx| settings_window::open_plugin(cx, &plugin_id));
     }
 }

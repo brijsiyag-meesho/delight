@@ -4,7 +4,7 @@
 use std::ops::Range;
 
 use gpui::{
-    AppContext, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    AppContext, Context, CursorStyle, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyContext,
     MouseButton, ParentElement, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
     Subscription, Window, div, point, prelude::FluentBuilder, px,
 };
@@ -12,7 +12,7 @@ use gpui::{
 use super::blink::BlinkCursor;
 use super::element::{Layout, TextElement, offset_for_point, position_for_offset};
 use super::history::{Edit, EditKind, History, apply};
-use super::{keymap, text};
+use super::{actions, text};
 use crate::ActiveTheme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +169,11 @@ impl TextEditor {
         cx.notify();
     }
 
+    /// Types `text` over the selection, as if it were typed.
+    pub fn insert(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.replace(self.selected_range.clone(), text, EditKind::Typing, cx);
+    }
+
     // ---------------------------------------------------------------------
     // Editing primitives
     // ---------------------------------------------------------------------
@@ -245,7 +250,7 @@ impl TextEditor {
     }
 
     /// The offset one visual row up or down, or `None` at the first or last
-    /// row — where the key then propagates (the launcher switches tools).
+    /// row.
     pub(super) fn vertical(&mut self, offset: usize, down: bool) -> Option<usize> {
         let layout = self.layout.as_ref()?;
         let pos = position_for_offset(layout, offset)?;
@@ -262,6 +267,33 @@ impl TextEditor {
     pub(super) fn offset_for_mouse(&self, position: gpui::Point<Pixels>) -> Option<usize> {
         let layout = self.layout.as_ref()?;
         Some(offset_for_point(layout, position - layout.bounds.origin))
+    }
+}
+
+impl TextEditor {
+    /// `Editor`, plus what the keymap can test, as in Zed:
+    /// * `multiline` — ↵ variants insert a line;
+    /// * `showing_completion` — a greyed completion shows (Tab accepts it);
+    /// * `start_of_input` / `end_of_input` — the cursor is at the very start
+    ///   / end with nothing selected (e.g. ↓ at the end moves to the tools).
+    fn key_context(&self) -> KeyContext {
+        let mut context = KeyContext::default();
+        context.add(actions::CONTEXT);
+        if self.multiline {
+            context.add("multiline");
+        }
+        if self.visible_completion().is_some() {
+            context.add("showing_completion");
+        }
+        if self.selected_range.is_empty() {
+            if self.cursor() == 0 {
+                context.add("start_of_input");
+            }
+            if self.cursor() == self.content.len() {
+                context.add("end_of_input");
+            }
+        }
+        context
     }
 }
 
@@ -294,7 +326,7 @@ impl Render for TextEditor {
             .track_scroll(&self.scroll)
             .child(element);
         let root = div()
-            .key_context(keymap::CONTEXT)
+            .key_context(self.key_context())
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
             .w_full()
@@ -305,6 +337,6 @@ impl Render for TextEditor {
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .child(body);
-        keymap::wire(root, cx)
+        actions::wire(root, cx)
     }
 }

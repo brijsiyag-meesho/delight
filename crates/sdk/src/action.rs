@@ -10,7 +10,9 @@ pub struct Action {
     /// The action's own key, as a GPUI keystroke (`"cmd-enter"`,
     /// `"cmd-shift-enter"`, `"alt-k"`). Use it for destructive actions: ↵ is
     /// only ever given to an action *without* a shortcut (the primary one, or
-    /// the first), and ⌥2… to the rest. `None`: a key is assigned.
+    /// the first), and ⌥2… to the rest. `None`: a key is assigned. A key
+    /// Delight's keymap already binds (⌘K, Esc…) is ignored: a key is
+    /// assigned instead.
     pub shortcut: Option<String>,
     pub kind: ActionKind,
 }

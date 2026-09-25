@@ -6,6 +6,10 @@
 //! * this file — the launcher's state and behaviour.
 //! * `view` — drawing it.
 //! * `footer` — which key runs which footer action.
+//!
+//! Keys come from the keymap (`crate::keymap`) by focus: the input
+//! (`Launcher > Editor`) edits text, the tool list (`Launcher > ToolList`)
+//! moves between tools, and `Launcher` keys work in both.
 
 mod footer;
 mod view;
@@ -21,11 +25,13 @@ use delight_sdk::{Action, ActionKind, Input, ToolContext, ToolView};
 use delight_ui::theme::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT};
 use delight_ui::{EditorEvent, EditorFont, TextEditor};
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, KeyDownEvent, ScrollHandle, SharedString,
+    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, ScrollHandle, SharedString,
     Subscription, Task, Window, actions, point, px,
 };
+use gpui::private::schemars::JsonSchema;
+use serde::Deserialize;
 
-pub use window::{hide, open, set_input, show, toast, toggle};
+pub use window::{hide, open, plugins_reloaded, refresh, set_input, show, toast, toggle};
 
 use self::footer::ActionKey;
 use crate::platform;
@@ -51,34 +57,38 @@ const CRASH_TOAST: Duration = Duration::from_secs(8);
 const AUTO_PASTE_MAX_BYTES: usize = 1 << 20;
 
 const CONTEXT: &str = "Launcher";
+const TOOL_LIST_CONTEXT: &str = "ToolList";
 
-actions!(launcher, [Dismiss, RunPrimaryAction, SelectPrevious, SelectNext, ClearInput]);
+actions!(
+    launcher,
+    [
+        Dismiss,
+        ClearInput,
+        OpenSettings,
+        /// Moves focus to the next field (the input, the tool list, the
+        /// tool's own fields).
+        FocusNext,
+        FocusPrevious,
+        /// Moves focus from the input to the tool list.
+        FocusTools,
+        /// In the tool list; on the first tool, back to the input.
+        SelectPrevious,
+        SelectNext,
+    ]
+);
 
-/// ⌘1…⌘9: selects the nth tool in the list.
-#[derive(Clone, Debug, PartialEq, gpui::Action)]
-#[action(namespace = launcher, no_json)]
+/// Selects the nth tool in the list, from 1.
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema, gpui::Action)]
+#[action(namespace = launcher)]
+#[schemars(crate = "gpui::private::schemars")]
 struct SelectTool(usize);
 
-/// ⌥2…⌥9: runs the footer action with that key.
-#[derive(Clone, Debug, PartialEq, gpui::Action)]
-#[action(namespace = launcher, no_json)]
-struct RunAltAction(usize);
-
-pub fn bind_keys(cx: &mut App) {
-    let context = Some(CONTEXT);
-    cx.bind_keys([
-        KeyBinding::new("escape", Dismiss, context),
-        KeyBinding::new("enter", RunPrimaryAction, context),
-        // Reach the launcher when the input's cursor can't move further.
-        KeyBinding::new("up", SelectPrevious, context),
-        KeyBinding::new("down", SelectNext, context),
-        KeyBinding::new("ctrl-p", SelectPrevious, context),
-        KeyBinding::new("ctrl-n", SelectNext, context),
-        KeyBinding::new("cmd-k", ClearInput, context),
-    ]);
-    cx.bind_keys((1..=9).map(|n| KeyBinding::new(&format!("cmd-{n}"), SelectTool(n - 1), context)));
-    cx.bind_keys((2..=9).map(|n| KeyBinding::new(&format!("alt-{n}"), RunAltAction(n), context)));
-}
+/// Runs the nth footer action without a shortcut of its own, from 1 (the
+/// primary one).
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema, gpui::Action)]
+#[action(namespace = launcher)]
+#[schemars(crate = "gpui::private::schemars")]
+struct RunAction(usize);
 
 /// An operation's identity: `(plugin id, operation id)`.
 type OperationKey = (String, String);
@@ -86,6 +96,8 @@ type OperationKey = (String, String);
 pub struct Launcher {
     focus_handle: FocusHandle,
     input: Entity<TextEditor>,
+    /// The tool list's focus (it's a Tab stop after the input).
+    list_focus: FocusHandle,
     /// The tools that fit the input, best first.
     candidates: Vec<Candidate>,
     selected: Option<usize>,
@@ -143,6 +155,7 @@ impl Launcher {
         let mut launcher = Self {
             focus_handle: cx.focus_handle(),
             input,
+            list_focus: cx.focus_handle().tab_stop(true),
             candidates: Vec::new(),
             selected: None,
             picked: None,
@@ -293,14 +306,40 @@ impl Launcher {
         cx.notify();
     }
 
-    fn select_previous(&mut self, cx: &mut Context<Self>) {
-        if let Some(index) = self.selected.and_then(|i| i.checked_sub(1)) {
-            self.select(index, cx);
+    /// On the first tool (or none), back to the input.
+    fn select_previous(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.selected.and_then(|i| i.checked_sub(1)) {
+            Some(index) => self.select(index, cx),
+            None => window.focus(&self.input.focus_handle(cx)),
         }
     }
 
     fn select_next(&mut self, cx: &mut Context<Self>) {
         self.select(self.selected.map_or(0, |i| i + 1), cx);
+    }
+
+    /// Moves focus to the tool list, selecting the first tool if none is.
+    fn focus_tools(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.candidates.is_empty() {
+            return;
+        }
+        if self.selected.is_none() {
+            self.select(0, cx);
+        }
+        window.focus(&self.list_focus);
+        cx.notify();
+    }
+
+    /// Typing while the tool list has focus goes on in the input.
+    fn on_list_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let keystroke = &event.keystroke;
+        let Some(text) = keystroke.key_char.clone() else { return };
+        if keystroke.modifiers.platform || keystroke.modifiers.control {
+            return;
+        }
+        cx.stop_propagation();
+        window.focus(&self.input.focus_handle(cx));
+        self.input.update(cx, |input, cx| input.insert(&text, cx));
     }
 
     /// The selected tool's view, opened on first use; `None` if its plugin
@@ -323,6 +362,10 @@ impl Launcher {
         let Some(candidate) = self.selected_candidate() else { return };
         let context = ToolContext::new(candidate.operation_id.clone(), Input::new(self.text(cx)));
         view.update(&context, cx);
+    }
+
+    fn has_settings(&self, plugin_id: &str, cx: &App) -> bool {
+        cx.global::<AppState>().registry.get(plugin_id).is_some_and(|p| p.plugin.has_settings())
     }
 
     /// Why the plugin crashed in this run, if it did.
@@ -349,24 +392,40 @@ impl Launcher {
     // Footer actions
     // -------------------------------------------------------------------------
 
-    /// The selected tool's footer actions with their keys.
-    fn keyed_actions(&self, cx: &App) -> Vec<(Action, ActionKey)> {
-        let view = self.selected_candidate().and_then(|c| self.views.get(&c.key()));
-        view.map(|view| footer::keyed(view.actions(cx))).unwrap_or_default()
+    /// The selected tool's footer actions with their keys. An action's own
+    /// shortcut gives way to the keymap where the focus is.
+    fn keyed_actions(&self, window: &Window, cx: &App) -> Vec<(Action, ActionKey)> {
+        let Some(view) = self.selected_candidate().and_then(|c| self.views.get(&c.key())) else {
+            return Vec::new();
+        };
+        let keymap = cx.key_bindings();
+        let keymap = keymap.borrow();
+        let context = window.context_stack();
+        let is_bound = |keystroke: &Keystroke| !keymap.bindings_for_input(&[keystroke.clone()], &context).0.is_empty();
+        footer::keyed(view.actions(cx), is_bound)
     }
 
-    fn run_action_with_key(&mut self, key: ActionKey, cx: &mut Context<Self>) {
-        if let Some((action, _)) = self.keyed_actions(cx).into_iter().find(|(_, k)| *k == key) {
+    /// The keystroke that runs a footer action, if any.
+    fn keystroke_for(&self, key: &ActionKey, window: &Window) -> Option<Keystroke> {
+        match key {
+            ActionKey::Numbered(n) => delight_ui::keystroke_for(&RunAction(*n), window),
+            ActionKey::Own(keystroke) => Some(keystroke.clone()),
+        }
+    }
+
+    fn run_action(&mut self, key: ActionKey, window: &Window, cx: &mut Context<Self>) {
+        if let Some((action, _)) = self.keyed_actions(window, cx).into_iter().find(|(_, k)| *k == key) {
             self.perform(action, cx);
         }
     }
 
-    /// Runs the footer action whose own shortcut was pressed.
-    fn on_key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    /// Runs the footer action whose own shortcut was pressed (the keymap
+    /// had no binding for it).
+    fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let pressed = &event.keystroke;
-        let hit = self.keyed_actions(cx).into_iter().find(|(_, key)| match key {
+        let hit = self.keyed_actions(window, cx).into_iter().find(|(_, key)| match key {
             ActionKey::Own(own) => footer::matches(own, pressed),
-            _ => false,
+            ActionKey::Numbered(_) => false,
         });
         if let Some((action, _)) = hit {
             cx.stop_propagation();

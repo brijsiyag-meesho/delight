@@ -1,89 +1,115 @@
 //! The system-wide shortcut that shows and hides the launcher
 //! ([`Settings::launcher_shortcut`](delight_core::Settings), ⌘⇧Space by
-//! default).
+//! default). It's a GPUI keystroke (`cmd-shift-space`) like every other key
+//! in Delight; macOS registers it through `global-hotkey`, which reads the
+//! same key names joined with `+`. It can be changed while Delight runs.
 
 use anyhow::{anyhow, ensure};
 use delight_core::settings::DEFAULT_LAUNCHER_SHORTCUT;
+use delight_ui::keystroke_label;
 use futures::channel::mpsc::{self, UnboundedReceiver};
-use global_hotkey::hotkey::{Code, HotKey, Modifiers};
+use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+use gpui::{Global, Keystroke};
 
-/// A registered shortcut. It works while `manager` is alive.
-pub struct Registered {
-    pub manager: GlobalHotKeyManager,
-    pub hotkey: HotKey,
-    /// One item per press.
-    pub presses: UnboundedReceiver<()>,
+/// The registered launcher shortcut, a GPUI global. It works while this
+/// value is alive.
+pub struct LauncherShortcut {
+    manager: GlobalHotKeyManager,
+    keystroke: Keystroke,
+    hotkey: HotKey,
 }
 
-/// Parses a shortcut such as `cmd+shift+Space`. It must include ⌘, ⌥ or ⌃:
-/// a system-wide shortcut on a plain key would stop that key typing anywhere.
-pub fn parse(shortcut: &str) -> anyhow::Result<HotKey> {
-    let hotkey: HotKey = shortcut.parse().map_err(|e| anyhow!("{shortcut:?} isn't a shortcut: {e}"))?;
-    let needed = Modifiers::SUPER | Modifiers::ALT | Modifiers::CONTROL;
-    ensure!(hotkey.mods.intersects(needed), "{shortcut:?} needs ⌘, ⌥ or ⌃");
-    Ok(hotkey)
-}
+impl Global for LauncherShortcut {}
 
-/// Registers `shortcut`; if it's invalid or another app (or macOS) has it,
-/// logs why and registers ⌘⇧Space instead.
-pub fn register(shortcut: &str) -> anyhow::Result<Registered> {
-    let manager = GlobalHotKeyManager::new()?;
-    let hotkey = match parse(shortcut).and_then(|hotkey| Ok(manager.register(hotkey).map(|()| hotkey)?)) {
-        Ok(hotkey) => hotkey,
-        Err(e) => {
-            log::error!("launcher shortcut: {e:#} — using {DEFAULT_LAUNCHER_SHORTCUT}");
-            let hotkey = parse(DEFAULT_LAUNCHER_SHORTCUT)?;
+impl LauncherShortcut {
+    /// Registers `shortcut`; if it's invalid or refused, logs why and
+    /// registers ⌘⇧Space instead. Also returns a stream with one item per
+    /// press.
+    pub fn register(shortcut: &str) -> anyhow::Result<(Self, UnboundedReceiver<()>)> {
+        let manager = GlobalHotKeyManager::new()?;
+        let register = |shortcut: &str| -> anyhow::Result<(Keystroke, HotKey)> {
+            let keystroke = Keystroke::parse(shortcut)?;
+            let hotkey = to_hotkey(&keystroke)?;
             manager.register(hotkey)?;
-            hotkey
+            Ok((keystroke, hotkey))
+        };
+        let (keystroke, hotkey) = match register(shortcut) {
+            Ok(registered) => registered,
+            Err(e) => {
+                log::error!("launcher shortcut {shortcut:?}: {e:#} — using {DEFAULT_LAUNCHER_SHORTCUT}");
+                register(DEFAULT_LAUNCHER_SHORTCUT)?
+            }
+        };
+        let (sender, presses) = mpsc::unbounded();
+        // Only Delight's one shortcut is registered: every press is it.
+        GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
+            if event.state == HotKeyState::Pressed {
+                let _ = sender.unbounded_send(());
+            }
+        }));
+        Ok((Self { manager, keystroke, hotkey }, presses))
+    }
+
+    pub fn keystroke(&self) -> &Keystroke {
+        &self.keystroke
+    }
+
+    /// Switches to `keystroke`. The new one is registered before the old one
+    /// is released, so a refused shortcut leaves the old one working.
+    pub fn change(&mut self, keystroke: &Keystroke) -> anyhow::Result<()> {
+        let hotkey = to_hotkey(keystroke)?;
+        if hotkey != self.hotkey {
+            self.manager
+                .register(hotkey)
+                .map_err(|e| anyhow!("macOS refused {}: {e}", keystroke_label(keystroke)))?;
+            let _ = self.manager.unregister(self.hotkey);
+            self.hotkey = hotkey;
         }
-    };
-    let (sender, presses) = mpsc::unbounded();
-    // Only Delight's one shortcut is registered: every press is it.
-    GlobalHotKeyEvent::set_event_handler(Some(move |event: GlobalHotKeyEvent| {
-        if event.state == HotKeyState::Pressed {
-            let _ = sender.unbounded_send(());
-        }
-    }));
-    Ok(Registered { manager, hotkey, presses })
+        self.keystroke = keystroke.clone();
+        Ok(())
+    }
 }
 
-/// How macOS writes the shortcut, e.g. `⌘⇧Space`, `⌥K`.
-pub fn label(hotkey: HotKey) -> String {
-    let mut label = String::new();
-    for (modifier, symbol) in
-        [(Modifiers::CONTROL, "⌃"), (Modifiers::ALT, "⌥"), (Modifiers::SHIFT, "⇧"), (Modifiers::SUPER, "⌘")]
-    {
-        if hotkey.mods.contains(modifier) {
-            label.push_str(symbol);
-        }
-    }
-    let key = hotkey.key.to_string();
-    let key = match hotkey.key {
-        Code::Enter => "↵",
-        Code::Backspace => "⌫",
-        Code::Tab => "⇥",
-        Code::Escape => "⎋",
-        _ => key.strip_prefix("Key").or_else(|| key.strip_prefix("Digit")).unwrap_or(&key),
-    };
-    label + key
+/// `cmd-shift-space` → `cmd+shift+space`: how `global-hotkey` (and the menu
+/// bar menu, through `muda`) write a shortcut.
+pub fn plus_separated(keystroke: &Keystroke) -> String {
+    let m = &keystroke.modifiers;
+    let modifiers = [(m.platform, "cmd"), (m.alt, "alt"), (m.control, "ctrl"), (m.shift, "shift")];
+    let mut parts: Vec<&str> = modifiers.iter().filter(|(on, _)| *on).map(|(_, name)| *name).collect();
+    parts.push(&keystroke.key);
+    parts.join("+")
+}
+
+/// The keystroke as a system-wide hotkey. It must include ⌘, ⌥ or ⌃: a
+/// system-wide shortcut on a plain key would stop that key typing anywhere.
+fn to_hotkey(keystroke: &Keystroke) -> anyhow::Result<HotKey> {
+    let m = &keystroke.modifiers;
+    ensure!(m.platform || m.alt || m.control, "a shortcut needs ⌘, ⌥ or ⌃");
+    plus_separated(keystroke).parse().map_err(|_| anyhow!("{} can't be a shortcut", keystroke_label(keystroke)))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_and_labels_shortcuts() {
-        assert_eq!(label(parse(DEFAULT_LAUNCHER_SHORTCUT).unwrap()), "⇧⌘Space");
-        assert_eq!(label(parse("alt+KeyK").unwrap()), "⌥K");
-        assert_eq!(label(parse("ctrl+alt+Digit1").unwrap()), "⌃⌥1");
+    fn hotkey(shortcut: &str) -> anyhow::Result<HotKey> {
+        to_hotkey(&Keystroke::parse(shortcut)?)
     }
 
     #[test]
-    fn rejects_invalid_and_modifier_less_shortcuts() {
-        assert!(parse("cmd+NoSuchKey").is_err());
-        assert!(parse("KeyK").is_err(), "a plain key");
-        assert!(parse("shift+KeyK").is_err(), "shift alone types a capital");
+    fn keystrokes_become_hotkeys() {
+        assert_eq!(hotkey(DEFAULT_LAUNCHER_SHORTCUT).unwrap().into_string(), "shift+super+Space");
+        assert_eq!(hotkey("alt-k").unwrap().into_string(), "alt+KeyK");
+        assert!(hotkey("ctrl-alt-1").is_ok());
+        assert!(hotkey("cmd-/").is_ok(), "punctuation");
+        assert!(hotkey("cmd-f5").is_ok());
+    }
+
+    #[test]
+    fn rejects_modifier_less_and_unknown_keys() {
+        assert!(hotkey("k").is_err(), "a plain key");
+        assert!(hotkey("shift-k").is_err(), "shift alone types a capital");
+        assert!(hotkey("cmd-nosuchkey").is_err(), "not a key");
     }
 }

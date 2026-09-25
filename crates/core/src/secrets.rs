@@ -9,6 +9,7 @@
 
 use anyhow::ensure;
 use security_framework::base::Error;
+use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
 use security_framework::passwords::{PasswordOptions, delete_generic_password, generic_password, set_generic_password};
 
 use crate::plugin_store::valid_plugin_id;
@@ -50,6 +51,30 @@ pub fn set(plugin_id: &str, key: &str, value: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Deletes every secret a plugin stored (the plugin was deleted).
+pub fn forget_plugin(plugin_id: &str) -> anyhow::Result<()> {
+    let prefix = account(plugin_id, "")?;
+    let found = ItemSearchOptions::new()
+        .class(ItemClass::generic_password())
+        .service(SERVICE)
+        .load_attributes(true)
+        .limit(Limit::All)
+        .search();
+    let items = match found {
+        Ok(items) => items,
+        Err(e) if not_found(&e) => return Ok(()),
+        Err(e) => return Err(anyhow::anyhow!("Keychain: {e}")),
+    };
+    let accounts = items.iter().filter_map(|item| item.simplify_dict()?.remove("acct"));
+    for account in accounts.filter(|a| a.starts_with(&prefix)) {
+        match delete_generic_password(SERVICE, &account) {
+            Err(e) if !not_found(&e) => return Err(anyhow::anyhow!("Keychain: {e}")),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +93,19 @@ mod tests {
         assert_eq!(get(plugin, &key).unwrap(), None);
         set(plugin, &key, "").unwrap(); // deleting what isn't there is fine
         assert!(set("../evil", &key, "x").is_err());
+    }
+
+    /// Real Keychain, like the test above.
+    #[test]
+    #[ignore]
+    fn forgets_every_secret_of_one_plugin() {
+        let (gone, kept) = ("delight.test-gone", "delight.test-kept");
+        set(gone, "a", "1").unwrap();
+        set(gone, "b", "2").unwrap();
+        set(kept, "a", "3").unwrap();
+        forget_plugin(gone).unwrap();
+        assert_eq!((get(gone, "a").unwrap(), get(gone, "b").unwrap()), (None, None));
+        assert_eq!(get(kept, "a").unwrap().as_deref(), Some("3"));
+        set(kept, "a", "").unwrap();
     }
 }
