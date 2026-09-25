@@ -7,6 +7,9 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Result, SharedString};
 
+/// Delight's logo (SVG) — the one copy every part of the app uses.
+pub const LOGO_SVG: &[u8] = include_bytes!("../assets/logo.svg");
+
 /// The app's asset source: install it with `Application::with_assets(Assets)`.
 pub struct Assets;
 

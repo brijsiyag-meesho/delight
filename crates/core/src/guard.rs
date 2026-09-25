@@ -10,7 +10,7 @@
 //!   view (the app's panic boundary) can stop halfway through a GPUI update.
 //!   GPUI isn't unwind-safe there, so carrying on would freeze or crash the
 //!   UI. Those crashes are [`fatal`]: the handler from [`set_fatal_handler`]
-//!   runs — the app turns the plugin off and relaunches. Without a handler
+//!   runs — the app turns the plugin off and quits. Without a handler
 //!   (tests) they're treated like background crashes.
 //!
 //! Not catchable: segfaults, stack overflows, aborts, and panics in a
@@ -28,7 +28,7 @@ use delight_sdk::gpui::{AnyView, App};
 use delight_sdk::{Action, Detection, Input, Plugin, PluginManifest, SettingsView, ToolContext, ToolView};
 
 /// Called for a crash that leaves GPUI unusable: `(plugin id, plugin name,
-/// message)`. Expected not to return (the app relaunches).
+/// message)`. Expected not to return (the app quits).
 pub type FatalHandler = fn(&str, &str, &str);
 
 static FATAL: OnceLock<FatalHandler> = OnceLock::new();

@@ -21,7 +21,7 @@ mod styled;
 mod switch;
 pub mod theme;
 
-pub use assets::{Assets, IconName};
+pub use assets::{Assets, IconName, LOGO_SVG};
 pub use badge::LogoBadge;
 pub use button::{Button, ButtonVariant, IconButton};
 pub use editor::{EditorEvent, EditorFont, TextEditor};

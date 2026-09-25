@@ -3,14 +3,8 @@ use std::path::Path;
 fn main() {
     // Records the compiler version for `BUILD_ID`: plugins must be built by the
     // same rustc as the app, since Rust has no stable ABI.
-    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
-    let version = std::process::Command::new(rustc)
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
-    println!("cargo:rustc-env=DELIGHT_RUSTC_VERSION={}", version.trim());
+    let rustc = rustc_version::version_meta().expect("rustc's version");
+    println!("cargo:rustc-env=DELIGHT_RUSTC_VERSION={}", rustc.short_version_string);
 
     // A hash of the SDK's sources for `BUILD_ID`. Cargo's build identity (and
     // so the plugin checks) doesn't cover source contents: without it, a

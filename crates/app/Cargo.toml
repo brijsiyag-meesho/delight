@@ -1,0 +1,31 @@
+[package]
+name = "delight"
+description = "Spotlight-style developer toolbox for macOS, built on GPUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "delight"
+path = "src/main.rs"
+
+[dependencies]
+delight-sdk.workspace = true
+delight-core.workspace = true
+delight-ui.workspace = true
+anyhow.workspace = true
+dirs.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+# GPUI comes from the shared delight-sdk dylib, never linked directly.
+gpui = { package = "delight-gpui", path = "../gpui-alias" }
+log.workspace = true
+plist.workspace = true
+resvg.workspace = true
+serde.workspace = true
+tray-icon.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-app-kit.workspace = true

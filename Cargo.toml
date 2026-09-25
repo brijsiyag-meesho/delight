@@ -5,6 +5,7 @@ members = [
     "crates/gpui-alias",
     "crates/ui",
     "crates/core",
+    "crates/app",
 ]
 
 [workspace.package]
@@ -21,6 +22,9 @@ delight-ui = { path = "crates/ui" }
 anyhow = "=1.0.100"
 base64 = "=0.22.1"
 dirs = "=5.0.1"
+# Without the `regex` feature: module filters only.
+env_logger = { version = "=0.11.8", default-features = false, features = ["auto-color", "humantime"] }
+futures = "=0.3.34"
 global-hotkey = "=0.8.0"
 gpui = "=0.2.2"
 hmac = "=0.12.1"
@@ -28,7 +32,9 @@ hmac = "=0.12.1"
 image = { version = "=0.25.10", default-features = false }
 libloading = "=0.8.9"
 log = "=0.4.33"
+plist = "=1.10.1"
 regex = "=1.11.3"
+rustc_version = "=0.4.1"
 resvg = { version = "=0.45.1", default-features = false }
 security-framework = "=3.7.0"
 serde = { version = "=1.0.228", features = ["derive"] }
@@ -40,8 +46,9 @@ tray-icon = "=0.25.1"
 unicode-segmentation = "=1.13.3"
 walkdir = "=2.5.0"
 yaml-rust2 = { version = "=0.13.0", default-features = false }
-objc = "=0.2.7"
-cocoa = "=0.26.0"
+# The versions tray-icon links.
+objc2 = "=0.6.4"
+objc2-app-kit = { version = "=0.3.2", features = ["NSApplication", "NSResponder", "NSRunningApplication"] }
 raw-window-handle = "=0.6.2"
 
 # No LTO: it can't be combined with the shared libdelight_sdk.dylib.
