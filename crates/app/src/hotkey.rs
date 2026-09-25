@@ -29,8 +29,7 @@ impl LauncherShortcut {
     pub fn register(shortcut: &str) -> anyhow::Result<(Self, UnboundedReceiver<()>)> {
         let manager = GlobalHotKeyManager::new()?;
         let register = |shortcut: &str| -> anyhow::Result<(Keystroke, HotKey)> {
-            let keystroke = Keystroke::parse(shortcut)?;
-            let hotkey = to_hotkey(&keystroke)?;
+            let (keystroke, hotkey) = parse(shortcut)?;
             manager.register(hotkey)?;
             Ok((keystroke, hotkey))
         };
@@ -69,6 +68,15 @@ impl LauncherShortcut {
         self.keystroke = keystroke.clone();
         Ok(())
     }
+}
+
+/// Reads a shortcut as settings store it (`cmd-shift-space`).
+pub fn parse(shortcut: &str) -> anyhow::Result<(Keystroke, HotKey)> {
+    let keystroke = Keystroke::parse(shortcut)?;
+    // `shift+super+Space` (an older format) parses as one odd key.
+    ensure!(!keystroke.key.contains('+'), "not written like {DEFAULT_LAUNCHER_SHORTCUT}");
+    let hotkey = to_hotkey(&keystroke)?;
+    Ok((keystroke, hotkey))
 }
 
 /// `cmd-shift-space` → `cmd+shift+space`: how `global-hotkey` (and the menu
@@ -111,5 +119,7 @@ mod tests {
         assert!(hotkey("k").is_err(), "a plain key");
         assert!(hotkey("shift-k").is_err(), "shift alone types a capital");
         assert!(hotkey("cmd-nosuchkey").is_err(), "not a key");
+        assert!(parse("shift+super+Space").is_err(), "the older format");
+        assert!(parse(DEFAULT_LAUNCHER_SHORTCUT).is_ok());
     }
 }

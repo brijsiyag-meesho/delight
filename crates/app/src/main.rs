@@ -16,6 +16,7 @@ mod state;
 mod tray;
 
 use delight_core::Settings;
+use delight_core::settings::DEFAULT_LAUNCHER_SHORTCUT;
 use delight_ui::ThemeMode;
 use futures::StreamExt;
 use futures::channel::mpsc::UnboundedReceiver;
@@ -61,6 +62,12 @@ fn main() {
 
         // The launcher shortcut and the menu bar icon are globals: they work
         // while they're alive.
+        // A saved shortcut that isn't valid (e.g. in an older format) is
+        // replaced by the default, once.
+        if let Err(e) = hotkey::parse(&state::settings(cx).launcher_shortcut) {
+            log::warn!("launcher shortcut {:?}: {e:#}; using {DEFAULT_LAUNCHER_SHORTCUT}", state::settings(cx).launcher_shortcut);
+            state::update_settings(cx, |s| s.launcher_shortcut = DEFAULT_LAUNCHER_SHORTCUT.to_string());
+        }
         let mut keystroke = None;
         match LauncherShortcut::register(&state::settings(cx).launcher_shortcut) {
             Ok((shortcut, presses)) => {

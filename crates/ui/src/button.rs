@@ -8,7 +8,7 @@ use gpui::{
     RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
-use crate::{ActiveTheme, Disableable, Icon, IconName, Keycap, KeycapStyle, Size, Sizable, Theme};
+use crate::{ActiveTheme, Disableable, Icon, IconName, Keycap, KeycapStyle, Selectable, Size, Sizable, Theme, Tooltip};
 
 type ClickHandler = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -171,18 +171,44 @@ impl RenderOnce for Button {
     }
 }
 
+/// An icon (and optionally a short label) that's clicked, or toggled with
+/// [`Selectable::selected`] (it's accent-tinted while on).
 #[derive(IntoElement)]
 pub struct IconButton {
     id: ElementId,
     icon: IconName,
+    label: Option<SharedString>,
+    tooltip: Option<SharedString>,
     size: Size,
+    selected: bool,
     disabled: bool,
     on_click: Option<ClickHandler>,
 }
 
 impl IconButton {
     pub fn new(id: impl Into<ElementId>, icon: IconName) -> Self {
-        Self { id: id.into(), icon, size: Size::default(), disabled: false, on_click: None }
+        Self {
+            id: id.into(),
+            icon,
+            label: None,
+            tooltip: None,
+            size: Size::default(),
+            selected: false,
+            disabled: false,
+            on_click: None,
+        }
+    }
+
+    /// A short label after the icon, e.g. an indent width.
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// What the button does, shown while hovering it.
+    pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(tooltip.into());
+        self
     }
 
     pub fn on_click(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
@@ -205,19 +231,37 @@ impl Disableable for IconButton {
     }
 }
 
+impl Selectable for IconButton {
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+}
+
 impl RenderOnce for IconButton {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let k = &cx.theme().colors;
+        let t = cx.theme();
+        let k = &t.colors;
         let hover = k.hover;
+        let fg = if self.selected { k.accent } else { k.secondary_label };
+        let height = self.size.control_height();
         div()
             .id(self.id)
             .flex_shrink_0()
-            .size(self.size.control_height())
+            .h(height)
+            .min_w(height)
+            .when(self.label.is_some(), |d| d.px(px(6.)))
             .rounded(px(6.))
             .flex()
             .items_center()
             .justify_center()
-            .child(Icon::new(self.icon).size(self.size.icon_size()).color(k.secondary_label))
+            .gap(px(4.))
+            .text_size(self.size.text_size())
+            .text_color(fg)
+            .when(self.selected, |d| d.bg(k.accent.opacity(if t.dark { 0.2 } else { 0.12 })))
+            .child(Icon::new(self.icon).size(self.size.icon_size()).color(fg))
+            .when_some(self.label, |d, label| d.child(label))
+            .when_some(self.tooltip, |d, tooltip| d.tooltip(Tooltip::text(tooltip)))
             .map(|d| {
                 if self.disabled {
                     swallow_clicks(d.opacity(0.5))

@@ -69,8 +69,11 @@ actions!(
         /// tool's own fields).
         FocusNext,
         FocusPrevious,
-        /// Moves focus from the input to the tool list.
+        /// Moves focus to the tool list.
         FocusTools,
+        /// Moves focus from the tool list into the selected tool (its first
+        /// field), if it has one.
+        FocusTool,
         /// In the tool list; on the first tool, back to the input.
         SelectPrevious,
         SelectNext,
@@ -327,6 +330,16 @@ impl Launcher {
             self.select(0, cx);
         }
         window.focus(&self.list_focus);
+        cx.notify();
+    }
+
+    /// Into the selected tool: the next Tab stop after the list. A tool
+    /// without one would send focus round to the input: stay in the list.
+    fn focus_tool(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus_next();
+        if self.input.focus_handle(cx).is_focused(window) {
+            window.focus(&self.list_focus);
+        }
         cx.notify();
     }
 

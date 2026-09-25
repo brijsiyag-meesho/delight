@@ -37,11 +37,13 @@ macro_rules! icons {
 }
 
 icons![
+    ArrowDownAZ => "arrow-down-a-z",
     Check => "check",
     CircleCheck => "circle-check",
     CircleX => "circle-x",
     Copy => "copy",
     Folder => "folder",
+    IndentIncrease => "list-indent-increase",
     Info => "info",
     Puzzle => "puzzle",
     RefreshCw => "refresh-cw",

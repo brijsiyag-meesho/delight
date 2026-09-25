@@ -14,6 +14,7 @@ path = "src/main.rs"
 delight-sdk.workspace = true
 delight-core.workspace = true
 delight-ui.workspace = true
+delight-tools.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
 env_logger.workspace = true

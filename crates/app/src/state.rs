@@ -51,11 +51,14 @@ pub fn init(cx: &mut App, settings: Settings) {
     cx.set_global(HostHandle(Rc::new(AppHost)));
 }
 
-/// The plugins installed in the plugins folder.
+/// The built-in tools, then the plugins installed in the plugins folder.
 fn load_plugins(settings: &Settings) -> Registry {
     let dir = settings.effective_plugin_dir();
     let _ = std::fs::create_dir_all(&dir);
     let mut registry = Registry::new();
+    for tool in delight_tools::all() {
+        registry.register(tool, PluginSource::Builtin);
+    }
     registry.load(&dir);
     for error in &registry.load_errors {
         log::warn!("plugin load error: {error}");

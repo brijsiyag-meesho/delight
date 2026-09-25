@@ -1,0 +1,16 @@
+[package]
+name = "delight-tools"
+description = "Delight's built-in tools: ordinary plugins compiled into the app, drawn with Delight's own UI kit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+delight-sdk.workspace = true
+delight-ui.workspace = true
+# GPUI comes from the shared delight-sdk dylib, never linked directly.
+gpui = { package = "delight-gpui", path = "../gpui-alias" }
+serde.workspace = true
+serde_json.workspace = true
+yaml-rust2.workspace = true

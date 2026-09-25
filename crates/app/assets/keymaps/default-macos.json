@@ -4,6 +4,7 @@
 //
 //   Launcher > Editor     the input has focus
 //   Launcher > ToolList   the tool list has focus
+//   SegmentedControl      a tool's tabs have focus (Tab, or → from the list)
 //   Settings              the Settings window
 //   (no context)          anywhere in Delight
 //
@@ -112,13 +113,28 @@
     }
   },
   {
-    // ↑ on the first tool goes back to the input.
+    // ↑ on the first tool goes back to the input; → moves into the tool.
     "context": "ToolList",
     "bindings": {
       "up": "launcher::SelectPrevious",
       "down": "launcher::SelectNext",
       "ctrl-p": "launcher::SelectPrevious",
-      "ctrl-n": "launcher::SelectNext"
+      "ctrl-n": "launcher::SelectNext",
+      "right": "launcher::FocusTool"
+    }
+  },
+  {
+    "context": "SegmentedControl",
+    "bindings": {
+      "left": "segmented_control::SelectPrevious",
+      "right": "segmented_control::SelectNext"
+    }
+  },
+  {
+    // ← on a tool's first tab goes back to the tool list.
+    "context": "Launcher > SegmentedControl && first",
+    "bindings": {
+      "left": "launcher::FocusTools"
     }
   },
   {

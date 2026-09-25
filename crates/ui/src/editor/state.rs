@@ -71,7 +71,8 @@ impl EventEmitter<EditorEvent> for TextEditor {}
 
 impl TextEditor {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus_handle = cx.focus_handle();
+        // A Tab stop: Tab moves on to the next field, and back.
+        let focus_handle = cx.focus_handle().tab_stop(true);
         let blink = cx.new(|_| BlinkCursor::new());
         let subscriptions = vec![
             cx.observe(&blink, |_, _, cx| cx.notify()),

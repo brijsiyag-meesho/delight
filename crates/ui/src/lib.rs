@@ -14,11 +14,13 @@ mod badge;
 mod button;
 pub mod editor;
 mod group;
+pub mod highlight;
 mod icon;
 mod keycap;
 mod segmented;
 mod styled;
 mod switch;
+mod tooltip;
 pub mod theme;
 
 pub use assets::{Assets, IconName, LOGO_SVG};
@@ -26,11 +28,13 @@ pub use badge::LogoBadge;
 pub use button::{Button, ButtonVariant, IconButton};
 pub use editor::{EditorEvent, EditorFont, TextEditor};
 pub use group::{Caption, Divider, Group};
+pub use highlight::{Code, CodeBlock, Language};
 pub use icon::Icon;
 pub use keycap::{Keycap, KeycapStyle, keystroke_for, keystroke_keys, keystroke_label, modifier_keys};
 pub use segmented::SegmentedControl;
 pub use styled::{Disableable, Selectable, Sizable, Size, StyledExt, h_flex, v_flex};
 pub use switch::Switch;
+pub use tooltip::Tooltip;
 pub use theme::{ActiveTheme, Theme, ThemeMode};
 
 /// Resolves the theme (loading the bundled font).

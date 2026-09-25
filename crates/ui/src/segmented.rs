@@ -1,14 +1,26 @@
 //! [`SegmentedControl`]: an NSSegmentedControl look-alike (tabs). Controlled:
 //! pass the selected index, get the picked one in `on_change`.
+//!
+//! Given a focus handle ([`SegmentedControl::focus`]) it's a Tab stop, and
+//! the keymap's `SegmentedControl` context moves between segments (← / →
+//! by default). Its key context adds `first` / `last` on the edge segments,
+//! so the keymap can send ← on the first one elsewhere.
 
 use std::rc::Rc;
 
 use gpui::{
-    App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, white,
+    App, ElementId, FocusHandle, InteractiveElement, IntoElement, KeyContext, MouseButton, ParentElement, RenderOnce,
+    SharedString, StatefulInteractiveElement, Styled, Window, actions, div, prelude::FluentBuilder, px, white,
 };
 
 use crate::{ActiveTheme, Disableable};
+
+actions!(segmented_control, [SelectPrevious, SelectNext]);
+
+/// The key context of a focused segmented control.
+pub const CONTEXT: &str = "SegmentedControl";
+
+type ChangeHandler = Rc<dyn Fn(&usize, &mut Window, &mut App)>;
 
 #[derive(IntoElement)]
 pub struct SegmentedControl {
@@ -16,12 +28,20 @@ pub struct SegmentedControl {
     options: Vec<SharedString>,
     selected: usize,
     disabled: bool,
-    on_change: Option<Rc<dyn Fn(&usize, &mut Window, &mut App)>>,
+    focus: Option<FocusHandle>,
+    on_change: Option<ChangeHandler>,
 }
 
 impl SegmentedControl {
     pub fn new(id: impl Into<ElementId>) -> Self {
-        Self { id: id.into(), options: Vec::new(), selected: 0, disabled: false, on_change: None }
+        Self { id: id.into(), options: Vec::new(), selected: 0, disabled: false, focus: None, on_change: None }
+    }
+
+    /// Makes it focusable (with the keys of the `SegmentedControl` context);
+    /// pass a handle made with `.tab_stop(true)` to reach it with Tab.
+    pub fn focus(mut self, handle: &FocusHandle) -> Self {
+        self.focus = Some(handle.clone());
+        self
     }
 
     pub fn options<S: Into<SharedString>>(mut self, options: impl IntoIterator<Item = S>) -> Self {
@@ -48,20 +68,59 @@ impl Disableable for SegmentedControl {
     }
 }
 
+impl SegmentedControl {
+    /// `SegmentedControl`, plus `first` / `last` on the edge segments.
+    fn key_context(&self) -> KeyContext {
+        let mut context = KeyContext::default();
+        context.add(CONTEXT);
+        if self.selected == 0 {
+            context.add("first");
+        }
+        if self.selected + 1 >= self.options.len() {
+            context.add("last");
+        }
+        context
+    }
+}
+
 impl RenderOnce for SegmentedControl {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let t = cx.theme();
         let (k, dark) = (&t.colors, t.dark);
         // The selected segment is a raised white chip (translucent in dark mode).
         let chip = if dark { white().opacity(0.2) } else { white() };
+        let focused = self.focus.as_ref().is_some_and(|handle| handle.is_focused(window));
+        let (selected, count) = (self.selected, self.options.len());
+        let move_to = |target: Option<usize>, handler: Option<ChangeHandler>| {
+            move |window: &mut Window, cx: &mut App| {
+                if let (Some(index), Some(on_change)) = (target.filter(|i| *i < count), &handler) {
+                    on_change(&index, window, cx);
+                }
+            }
+        };
+        let previous = move_to(selected.checked_sub(1), self.on_change.clone());
+        let next = move_to(Some(selected + 1), self.on_change.clone());
         let row = div()
             .id(self.id.clone())
+            .key_context(self.key_context())
+            .when_some(self.focus.clone(), |d, handle| {
+                // Clicking a segment focuses the control too, so ← / → go on from there.
+                let clicked = handle.clone();
+                d.track_focus(&handle).on_mouse_down(MouseButton::Left, move |_, window, _| window.focus(&clicked))
+            })
+            .when(!self.disabled, |d| {
+                d.on_action(move |_: &SelectPrevious, window, cx| previous(window, cx))
+                    .on_action(move |_: &SelectNext, window, cx| next(window, cx))
+            })
             .flex()
             .flex_shrink_0()
             .p(px(2.))
             .gap(px(2.))
             .rounded(px(7.))
             .bg(k.fill_strong)
+            // The focus ring, as macOS draws it around a focused control.
+            .border_1()
+            .border_color(if focused { k.focus_ring } else { gpui::transparent_black() })
             .when(self.disabled, |d| d.opacity(0.5).on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()));
         let (label, secondary) = (k.label, k.secondary_label);
         row.children(self.options.into_iter().enumerate().map(|(i, option)| {

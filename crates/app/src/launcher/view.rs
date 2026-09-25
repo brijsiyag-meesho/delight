@@ -13,7 +13,7 @@ use gpui::{
 use super::footer::ActionKey;
 use super::{
     BAR_HEIGHT, BAR_ICON_GAP, BAR_ICON_SIZE, BAR_PADDING_X, CONTEXT, ClearInput, Dismiss, FocusNext, FocusPrevious,
-    FocusTools, Launcher, OpenSettings, RunAction, SelectNext, SelectPrevious, SelectTool, TOOL_LIST_CONTEXT, hide,
+    FocusTool, FocusTools, Launcher, OpenSettings, RunAction, SelectNext, SelectPrevious, SelectTool, TOOL_LIST_CONTEXT, hide,
 };
 use delight_ui::theme::INPUT_LINE_HEIGHT;
 
@@ -58,6 +58,7 @@ impl Render for Launcher {
             .on_action(cx.listener(|_, _: &FocusNext, window, _| window.focus_next()))
             .on_action(cx.listener(|_, _: &FocusPrevious, window, _| window.focus_prev()))
             .on_action(cx.listener(|this, _: &FocusTools, window, cx| this.focus_tools(window, cx)))
+            .on_action(cx.listener(|this, _: &FocusTool, window, cx| this.focus_tool(window, cx)))
             .on_action(cx.listener(|this, _: &SelectPrevious, window, cx| this.select_previous(window, cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_next(cx)))
             .on_action(cx.listener(|this, SelectTool(n): &SelectTool, _, cx| {
@@ -196,6 +197,8 @@ impl Launcher {
         let Some(candidate) = self.selected_candidate().cloned() else {
             return pane.child(self.render_empty(t));
         };
+        // The plugin's name, unless the tool's title already says it.
+        let plugin_name = (candidate.plugin_name != candidate.title).then(|| candidate.plugin_name.clone());
         let header = h_flex()
             .h(px(24.))
             .gap(px(8.))
@@ -208,7 +211,7 @@ impl Launcher {
                     .text_size(t.text.size_sm)
                     .text_color(t.colors.tertiary_label)
                     .truncate()
-                    .child(candidate.plugin_name.clone()),
+                    .children(plugin_name),
             )
             .when(self.has_settings(&candidate.plugin_id, cx), |header| {
                 let plugin_id = candidate.plugin_id.clone();
