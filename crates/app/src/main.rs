@@ -34,11 +34,12 @@ fn main() {
     // Delight's warnings and errors on stderr; e.g. `DELIGHT_LOG=delight=debug`
     // for more, `DELIGHT_LOG=debug` to include GPUI's.
     env_logger::Builder::from_env(env_logger::Env::new().filter_or("DELIGHT_LOG", "delight=warn")).init();
-    if let Some(exit_code) = command_line() {
+    let restarted = std::env::args().nth(1).as_deref() == Some(lifecycle::RESTARTED);
+    if !restarted && let Some(exit_code) = command_line() {
         std::process::exit(exit_code);
     }
     // One Delight at a time; the lock is held until the process exits.
-    let _instance = match lifecycle::claim_single_instance() {
+    let _instance = match lifecycle::claim_single_instance(restarted) {
         Ok(lock) => lock,
         Err(e) => {
             log::error!("{e:#}");
