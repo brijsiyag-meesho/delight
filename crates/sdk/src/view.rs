@@ -28,8 +28,9 @@ pub trait ToolView {
     /// Called after creation and whenever the input changes. Keep it quick:
     /// start slow work on the background executor.
     fn update(&self, context: &ToolContext, cx: &mut App);
-    /// Footer actions; the primary one (or the first) is bound to ↵. Delight
-    /// renders them and calls [`ToolView::perform`] when one is pressed.
+    /// Footer actions, in the order shown, each with its own key if any.
+    /// Delight renders them and calls [`ToolView::perform`] when one is
+    /// pressed.
     fn actions(&self, _cx: &App) -> Vec<Action> {
         Vec::new()
     }
