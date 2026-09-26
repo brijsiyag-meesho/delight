@@ -8,6 +8,9 @@ members = [
     "crates/tools",
     "crates/app",
 ]
+# The `delight` CLI is its own workspace: a standalone binary, without the
+# shared-std setup of the app and plugins (see crates/cli/.cargo).
+exclude = ["crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -62,10 +65,12 @@ yaml-rust2 = { version = "=0.13.0", default-features = false }
 # The versions tray-icon links.
 objc2 = "=0.6.4"
 objc2-app-kit = { version = "=0.3.2", features = [
-    "NSAnimation", "NSAppearance", "NSApplication", "NSBezierPath", "NSColor", "NSEvent", "NSGlassEffectView", "NSGraphics", "NSImage", "NSResponder",
-    "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow", "objc2-quartz-core",
+    "NSAnimation", "NSAppearance", "NSApplication", "NSBezierPath", "NSColor", "NSEvent", "NSGlassEffectView", "NSGraphics", "NSImage", "NSPasteboard", "NSPasteboardItem", "NSResponder",
+    "NSRunningApplication", "NSView", "NSWorkspace", "NSVisualEffectView", "NSWindow", "objc2-quartz-core",
 ] }
-objc2-foundation = { version = "=0.3.2", features = ["NSGeometry", "NSString", "objc2-core-foundation"] }
+objc2-foundation = { version = "=0.3.2", features = ["NSArray", "NSData", "NSGeometry", "NSString", "NSURL", "objc2-core-foundation"] }
+# What kind of file a copied file is, from its extension.
+objc2-uniform-type-identifiers = { version = "=0.3.2", default-features = false, features = ["std", "UTCoreTypes", "UTType"] }
 raw-window-handle = "=0.6.2"
 
 # No LTO: it can't be combined with the shared libdelight_sdk.dylib.

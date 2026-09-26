@@ -61,7 +61,9 @@ impl EntityInputHandler for TextEditor {
         self.commit_composition();
     }
 
-    /// Typing, or committing a composition with its final text.
+    /// Typing, or committing a composition with its final text. A typed ↵
+    /// adds nothing: new lines come from `Newline` (⇧↵) and pasting, and ↵
+    /// is left to whatever binds it.
     fn replace_text_in_range(
         &mut self,
         range_utf16: Option<Range<usize>>,
@@ -69,6 +71,9 @@ impl EntityInputHandler for TextEditor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.composing.is_none() && matches!(new_text, "\n" | "\r") {
+            return;
+        }
         let range = self.target(range_utf16.as_ref());
         match self.composing.take() {
             Some(mut edit) => {

@@ -3,12 +3,18 @@
 //! id replaces one). Unlike plugins, they're drawn with Delight's own UI kit
 //! (`delight-ui`), whose widgets and syntax highlighting plugins don't get.
 //!
-//! * `output` — what the converting tools share: their result and actions.
+//! One folder per tool, each split the same way: `mod.rs` is the plugin
+//! (manifest and detection), `view.rs` its view, and `convert.rs` (or
+//! `render.rs`) the work itself, without UI. Next to them, `icon.svg`.
+//!
+//! * `shared` — what several tools use: results, the view wrapper.
 //! * `json` — format, minify, escape and unescape JSON.
 //! * `yaml` — YAML ⇄ JSON.
+//! * `svg` — preview SVG images; copy them as PNG or a data URI.
 
 mod json;
-mod output;
+mod shared;
+mod svg;
 mod yaml;
 
 use std::sync::Arc;
@@ -17,7 +23,7 @@ use delight_sdk::{Plugin, PluginManifest};
 
 /// Every built-in tool.
 pub fn all() -> Vec<Arc<dyn Plugin>> {
-    vec![Arc::new(json::JsonPlugin::new()), Arc::new(yaml::YamlPlugin::new())]
+    vec![Arc::new(json::JsonPlugin::new()), Arc::new(yaml::YamlPlugin::new()), Arc::new(svg::SvgPlugin::new())]
 }
 
 /// A built-in tool's manifest: versioned and authored as Delight.

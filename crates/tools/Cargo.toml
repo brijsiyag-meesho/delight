@@ -7,8 +7,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
+base64.workspace = true
 delight-sdk.workspace = true
 delight-ui.workspace = true
+resvg.workspace = true
 # GPUI comes from the shared delight-sdk dylib, never linked directly.
 gpui = { package = "delight-gpui", path = "../gpui-alias" }
 serde.workspace = true

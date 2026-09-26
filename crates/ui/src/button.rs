@@ -63,7 +63,6 @@ pub struct Button {
     icon: Option<IconName>,
     shortcut: Option<SharedString>,
     variant: ButtonVariant,
-    emphasized: bool,
     size: Size,
     disabled: bool,
     on_click: Option<ClickHandler>,
@@ -77,7 +76,6 @@ impl Button {
             icon: None,
             shortcut: None,
             variant: ButtonVariant::default(),
-            emphasized: false,
             size: Size::default(),
             disabled: false,
             on_click: None,
@@ -102,15 +100,9 @@ impl Button {
         self
     }
 
-    /// A keycap after the label, e.g. `"↵"` or `"⌥2"`.
+    /// A keycap after the label, e.g. `"↵"` or `"⌘↵"`.
     pub fn shortcut(mut self, shortcut: impl Into<SharedString>) -> Self {
         self.shortcut = Some(shortcut.into());
-        self
-    }
-
-    /// Medium-weight label: the default action among text buttons.
-    pub fn emphasized(mut self, emphasized: bool) -> Self {
-        self.emphasized = emphasized;
         self
     }
 
@@ -139,7 +131,7 @@ impl RenderOnce for Button {
         let c = self.variant.colors(cx.theme());
         let text = self.variant == ButtonVariant::Text;
         let padding = if text { self.size.padding_x() - px(2.) } else { self.size.padding_x() };
-        let weight = if !text || self.emphasized { FontWeight::MEDIUM } else { FontWeight::NORMAL };
+        let weight = if text { FontWeight::NORMAL } else { FontWeight::MEDIUM };
         div()
             .id(self.id)
             .flex_shrink_0()

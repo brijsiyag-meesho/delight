@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::{App, ImageSource, IntoElement, ParentElement, Pixels, RenderImage, RenderOnce, Styled, Window, div, img, px};
 use resvg::{tiny_skia, usvg};
-use smallvec::SmallVec;
 
 use crate::ActiveTheme;
 
@@ -52,8 +51,7 @@ fn logo(svg: &'static [u8]) -> Option<Arc<RenderImage>> {
     cache.entry((svg.as_ptr() as usize, svg.len())).or_insert_with(|| rasterise(svg)).clone()
 }
 
-/// Renders `svg` centred in a `LOGO_PIXELS` square, as the straight-alpha
-/// BGRA pixels GPUI draws.
+/// Renders `svg` centred in a `LOGO_PIXELS` square.
 fn rasterise(svg: &[u8]) -> Option<Arc<RenderImage>> {
     let tree = usvg::Tree::from_data(svg, &usvg::Options::default()).ok()?;
     let (w, h) = (tree.size().width(), tree.size().height());
@@ -62,18 +60,7 @@ fn rasterise(svg: &[u8]) -> Option<Arc<RenderImage>> {
     let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(offset(w), offset(h));
     let mut pixmap = tiny_skia::Pixmap::new(LOGO_PIXELS, LOGO_PIXELS)?;
     resvg::render(&tree, transform, &mut pixmap.as_mut());
-    let mut pixels = pixmap.take();
-    for px in pixels.chunks_exact_mut(4) {
-        px.swap(0, 2);
-        if px[3] > 0 {
-            let alpha = px[3] as f32 / 255.;
-            for c in &mut px[..3] {
-                *c = (*c as f32 / alpha) as u8;
-            }
-        }
-    }
-    let frame = image::Frame::new(image::RgbaImage::from_raw(LOGO_PIXELS, LOGO_PIXELS, pixels)?);
-    Some(Arc::new(RenderImage::new(SmallVec::from_elem(frame, 1))))
+    crate::render_image(pixmap.take(), LOGO_PIXELS, LOGO_PIXELS)
 }
 
 
