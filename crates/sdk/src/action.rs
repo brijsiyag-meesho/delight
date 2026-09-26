@@ -1,5 +1,6 @@
 //! Footer commands a tool view lists (see [`crate::ToolView::actions`]); the
-//! host draws them and binds their keys.
+//! host draws them and binds their keys, and runs them by calling
+//! [`crate::ToolView::perform`].
 
 #[derive(Debug, Clone)]
 #[non_exhaustive]
@@ -14,22 +15,13 @@ pub struct Action {
     /// Delight's keymap already binds (⌘K, Esc…) is ignored: a key is
     /// assigned instead.
     pub shortcut: Option<String>,
-    pub kind: ActionKind,
 }
 
 impl Action {
-    pub fn new(id: impl Into<String>, label: impl Into<String>, kind: ActionKind) -> Self {
-        Self { id: id.into(), label: label.into(), primary: false, shortcut: None, kind }
-    }
-    pub fn copy(id: impl Into<String>, label: impl Into<String>, text: impl Into<String>) -> Self {
-        Self::new(id, label, ActionKind::Copy { text: text.into() })
-    }
-    pub fn open_url(id: impl Into<String>, label: impl Into<String>, url: impl Into<String>) -> Self {
-        Self::new(id, label, ActionKind::OpenUrl { url: url.into() })
-    }
-    /// An action the tool view handles itself (see [`ActionKind::Custom`]).
-    pub fn custom(id: impl Into<String>, label: impl Into<String>) -> Self {
-        Self::new(id, label, ActionKind::Custom)
+    /// A button labelled `label`; pressing it (or its key) calls
+    /// [`crate::ToolView::perform`] with `id`.
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self { id: id.into(), label: label.into(), primary: false, shortcut: None }
     }
     /// Binds the action to `keystroke` (e.g. `"cmd-enter"`) instead of ↵ / ⌥N.
     pub fn shortcut(mut self, keystroke: impl Into<String>) -> Self {
@@ -40,18 +32,4 @@ impl Action {
         self.primary = true;
         self
     }
-}
-
-/// What the host does when an action is triggered.
-#[derive(Debug, Clone)]
-#[non_exhaustive]
-pub enum ActionKind {
-    /// Copy `text` to the clipboard, confirm it in the status bar and — if the
-    /// user turned on "Hide after copy" — hide Delight.
-    Copy { text: String },
-    /// Open `url` in the default browser.
-    OpenUrl { url: String },
-    /// Handled by the tool: Delight renders the button (and its ↵/⌥
-    /// shortcut) and calls [`crate::ToolView::perform`] with the action's id.
-    Custom,
 }

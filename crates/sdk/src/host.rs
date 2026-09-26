@@ -9,7 +9,9 @@ use serde_json::Value;
 use crate::Theme;
 
 /// Services the app provides to plugins: storage and a few app-level
-/// effects. The host never interprets what a plugin stores.
+/// effects. The host never interprets what a plugin stores. What GPUI
+/// already does — the clipboard's text and images, opening links — plugins
+/// do with GPUI directly.
 ///
 /// Where a plugin keeps what:
 /// * [`Host::settings`] — its preferences, one JSON value in Delight's
@@ -40,12 +42,20 @@ pub trait Host {
     /// — a search query, not a pasted document. Inputs over 1729 characters
     /// aren't kept.
     fn remember_input(&self, plugin_id: &str, text: SharedString, cx: &mut App);
-    /// Replaces the launcher's input with `text` (undoable with ⌘Z) — e.g.
-    /// to chain tools: decode, then format the result. Detection runs again
-    /// on the new input.
+    /// Replaces the launcher's input with `text` (undoable with ⌘Z), and
+    /// drops its files — e.g. to chain tools: decode, then format the
+    /// result. Detection runs again on the new input.
     fn set_input(&self, text: SharedString, cx: &mut App);
     /// Brief confirmation in the launcher's status bar.
     fn toast(&self, message: SharedString, cx: &mut App);
+    /// Hides the launcher, e.g. after copying the result the user came for.
+    fn hide(&self, cx: &mut App);
+    /// Puts a file named `name` holding `bytes` on the clipboard, like
+    /// copying it in Finder: pasting creates the file (Finder) or attaches it
+    /// (Mail, Slack). An image is also copied as a picture, for image editors
+    /// and notes. `name`'s extension says what kind (`"chart.png"`). Text and
+    /// images alone go through GPUI's clipboard (`cx.write_to_clipboard`).
+    fn copy_file(&self, name: &str, bytes: &[u8], cx: &mut App) -> std::io::Result<()>;
     fn open_settings(&self, plugin_id: &str, cx: &mut App);
 }
 
