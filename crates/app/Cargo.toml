@@ -6,8 +6,9 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+# `delight` is the plugin CLI (crates/cli).
 [[bin]]
-name = "delight"
+name = "delight-app"
 path = "src/main.rs"
 
 [dependencies]
@@ -37,3 +38,4 @@ zip.workspace = true
 objc2.workspace = true
 objc2-app-kit.workspace = true
 objc2-foundation.workspace = true
+objc2-uniform-type-identifiers.workspace = true

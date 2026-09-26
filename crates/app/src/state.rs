@@ -209,21 +209,32 @@ impl Host for AppHost {
         cx.theme().sdk.clone()
     }
 
-    fn remember_input(&self, plugin_id: &str, text: SharedString, cx: &mut App) {
+    fn remember_input(&self, plugin_id: &str, operation_id: &str, text: SharedString, cx: &mut App) {
         let state = cx.global_mut::<AppState>();
         if state.settings.input_history
-            && let Err(e) = state.input_history.remember(plugin_id, &text)
+            && let Err(e) = state.input_history.remember(plugin_id, operation_id, &text)
         {
             log::error!("remembering {plugin_id}'s input: {e:#}");
         }
     }
 
+    // Deferred, like `open_settings`: a plugin usually calls these while
+    // the launcher is handling a key or click, and the launcher can't be
+    // updated again until that's done.
     fn set_input(&self, text: SharedString, cx: &mut App) {
-        launcher::set_input(cx, text);
+        cx.defer(move |cx| launcher::set_input(cx, text));
     }
 
     fn toast(&self, message: SharedString, cx: &mut App) {
-        launcher::toast(cx, message);
+        cx.defer(move |cx| launcher::toast(cx, message));
+    }
+
+    fn hide(&self, cx: &mut App) {
+        cx.defer(launcher::hide);
+    }
+
+    fn copy_file(&self, name: &str, bytes: &[u8], _: &mut App) -> std::io::Result<()> {
+        crate::clipboard::copy_file(name, bytes).map_err(|e| std::io::Error::other(format!("{e:#}")))
     }
 
     fn open_settings(&self, plugin_id: &str, cx: &mut App) {

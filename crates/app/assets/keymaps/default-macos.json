@@ -4,6 +4,7 @@
 //
 //   Launcher > Editor     the input has focus
 //   Launcher > ToolList   the tool list has focus
+//   HistorySearch > Editor  the input history search (⌃R) has focus
 //   SegmentedControl      a tool's tabs have focus (Tab, or → from the list)
 //   Settings              the Settings window
 //   (no context)          anywhere in Delight
@@ -81,18 +82,9 @@
       "escape": "launcher::Dismiss",
       "cmd-k": "launcher::ClearInput",
       "cmd-,": "launcher::OpenSettings",
+      "ctrl-r": "history::Search",
       "tab": "launcher::FocusNext",
       "shift-tab": "launcher::FocusPrevious",
-      // The footer's actions: 1 is the primary one.
-      "enter": ["launcher::RunAction", 1],
-      "alt-2": ["launcher::RunAction", 2],
-      "alt-3": ["launcher::RunAction", 3],
-      "alt-4": ["launcher::RunAction", 4],
-      "alt-5": ["launcher::RunAction", 5],
-      "alt-6": ["launcher::RunAction", 6],
-      "alt-7": ["launcher::RunAction", 7],
-      "alt-8": ["launcher::RunAction", 8],
-      "alt-9": ["launcher::RunAction", 9],
       // The nth tool in the list.
       "cmd-1": ["launcher::SelectTool", 1],
       "cmd-2": ["launcher::SelectTool", 2],
@@ -110,6 +102,30 @@
     "context": "Launcher > Editor && end_of_input",
     "bindings": {
       "down": "launcher::FocusTools"
+    }
+  },
+  {
+    // While the input shows a completion: ⌃N / ⌃P complete with the next
+    // (older) / previous (newer) remembered input.
+    "context": "Launcher > Editor && showing_completion",
+    "bindings": {
+      "ctrl-n": "launcher::OlderCompletion",
+      "ctrl-p": "launcher::NewerCompletion"
+    }
+  },
+  {
+    // Searching the input history: ↑/↓ pick an input, ↵ or Tab uses it,
+    // Esc or ⌃R again goes back.
+    "context": "HistorySearch > Editor",
+    "bindings": {
+      "up": "history::SelectPrevious",
+      "down": "history::SelectNext",
+      "ctrl-p": "history::SelectPrevious",
+      "ctrl-n": "history::SelectNext",
+      "ctrl-r": "history::Cancel",
+      "enter": "history::Confirm",
+      "tab": "history::Confirm",
+      "escape": "history::Cancel"
     }
   },
   {

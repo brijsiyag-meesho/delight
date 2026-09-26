@@ -4,6 +4,7 @@
 //! `delight-sdk` — built in, or a plugin file loaded from the plugins folder.
 
 mod boundary;
+mod clipboard;
 mod hotkey;
 mod install;
 mod keymap;
@@ -35,6 +36,14 @@ fn main() {
     if let Some(exit_code) = command_line() {
         std::process::exit(exit_code);
     }
+    // One Delight at a time; the lock is held until the process exits.
+    let _instance = match lifecycle::claim_single_instance() {
+        Ok(lock) => lock,
+        Err(e) => {
+            log::error!("{e:#}");
+            std::process::exit(1);
+        }
+    };
     // Plugin panics are caught (delight_core::guard); one that leaves GPUI
     // unusable turns the plugin off and quits the app.
     delight_core::guard::install(Some(Settings::crash_note_path()));
@@ -115,6 +124,10 @@ fn handle_menu_click(command: TrayCommand, cx: &mut App) {
 /// * `--sdk-build-id` — prints the SDK build plugins must match.
 /// * `--check-plugin <dylib>` — loads a plugin like the app does and prints
 ///   its id, or why it can't load.
+/// * `--plugin-dir` — prints the folder this build loads plugins from
+///   (`plugins-debug` for a debug build, or the one set in Settings).
+/// * `--running` — prints the process id of the Delight running now, or
+///   nothing.
 ///
 /// Returns the exit code, or `None` to start the app.
 fn command_line() -> Option<i32> {
@@ -126,6 +139,16 @@ fn command_line() -> Option<i32> {
             Some(0)
         }
         ["--check-plugin", path] => Some(check_plugin(path)),
+        ["--plugin-dir"] => {
+            println!("{}", Settings::load().effective_plugin_dir().display());
+            Some(0)
+        }
+        ["--running"] => {
+            if let Some(pid) = lifecycle::running_instance() {
+                println!("{pid}");
+            }
+            Some(0)
+        }
         _ => None,
     }
 }

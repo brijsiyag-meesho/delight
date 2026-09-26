@@ -42,7 +42,6 @@ impl SettingsWindow {
                 s.open_at_login = on
             }, cx),
             toggle("blur", "Hide when focus is lost", None, settings.hide_on_blur, |s, on| s.hide_on_blur = on, cx),
-            toggle("hide-copy", "Hide after copying", None, settings.hide_after_copy, |s, on| s.hide_after_copy = on, cx),
             toggle(
                 "history",
                 "Input history",

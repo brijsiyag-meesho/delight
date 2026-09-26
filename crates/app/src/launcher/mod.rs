@@ -6,34 +6,37 @@
 //! * this file — the launcher's state and behaviour.
 //! * `view` — drawing it.
 //! * `footer` — which key runs which footer action.
+//! * `history` — ⌃R, searching the input history.
 //!
 //! Keys come from the keymap (`crate::keymap`) by focus: the input
 //! (`Launcher > Editor`) edits text, the tool list (`Launcher > ToolList`)
 //! moves between tools, and `Launcher` keys work in both.
 
 mod footer;
+mod history;
 mod view;
 mod window;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use delight_core::stats::InputStats;
 use delight_core::{Candidate, classify};
-use delight_sdk::{Action, ActionKind, Input, ToolContext, ToolView};
+use delight_sdk::{Action, Input, ToolContext, ToolView};
 use delight_ui::theme::{INPUT_FONT_SIZE, INPUT_LINE_HEIGHT};
 use delight_ui::{EditorEvent, EditorFont, TextEditor};
-use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, ScrollHandle, SharedString,
-    Subscription, Task, Window, actions, point, px,
-};
 use gpui::private::schemars::JsonSchema;
+use gpui::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, KeyDownEvent, Keystroke, ScrollHandle, SharedString,
+    Subscription, Task, Window, actions, px,
+};
 use serde::Deserialize;
 
 pub use window::{hide, open, plugins_reloaded, refresh, set_input, show, toast, toggle};
 
-use self::footer::ActionKey;
 use crate::platform;
 use crate::state::{self, AppState};
 
@@ -77,6 +80,10 @@ actions!(
         /// In the tool list; on the first tool, back to the input.
         SelectPrevious,
         SelectNext,
+        /// Completes the input with an older remembered input.
+        OlderCompletion,
+        /// Completes the input with a newer remembered input.
+        NewerCompletion,
     ]
 );
 
@@ -86,19 +93,17 @@ actions!(
 #[schemars(crate = "gpui::private::schemars")]
 struct SelectTool(usize);
 
-/// Runs the nth footer action without a shortcut of its own, from 1 (the
-/// primary one).
-#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema, gpui::Action)]
-#[action(namespace = launcher)]
-#[schemars(crate = "gpui::private::schemars")]
-struct RunAction(usize);
-
 /// An operation's identity: `(plugin id, operation id)`.
 type OperationKey = (String, String);
 
 pub struct Launcher {
     focus_handle: FocusHandle,
     input: Entity<TextEditor>,
+    /// The files pasted into the input (⌘V on files copied in Finder),
+    /// shown as tags under its text.
+    files: Arc<[PathBuf]>,
+    /// Their total size, for the status bar.
+    files_bytes: u64,
     /// The tool list's focus (it's a Tab stop after the input).
     list_focus: FocusHandle,
     /// The tools that fit the input, best first.
@@ -107,11 +112,16 @@ pub struct Launcher {
     /// The tool the user picked: it stays selected while the input changes,
     /// as long as it still fits.
     picked: Option<OperationKey>,
-    /// The plugin that remembered the input completion showing now.
-    completion_plugin: Option<String>,
-    /// After a completion is accepted: select this plugin's tool once the
-    /// tools are asked about the new input.
-    prefer_plugin: Option<String>,
+    /// The tool the input completion showing now was remembered for.
+    completion_tool: Option<OperationKey>,
+    /// Which remembered input the completion shows: 0 the newest that fits,
+    /// then older ones (⌃N next, ⌃P previous). Back to 0 as the input changes.
+    completion_index: usize,
+    /// After a remembered input is taken (a completion, or from ⌃R): the
+    /// tool it was for, to select once the tools are asked about it.
+    prefer_tool: Option<OperationKey>,
+    /// The input history search (⌃R), while it's open.
+    history: Option<history::HistorySearch>,
     /// The views opened so far, kept (with their state) while Delight runs.
     views: HashMap<OperationKey, Rc<dyn ToolView>>,
     stats: InputStats,
@@ -120,9 +130,8 @@ pub struct Launcher {
     /// Replacing it cancels the previous classification.
     classify_task: Option<Task<()>>,
     list_scroll: ScrollHandle,
-    detail_scroll: ScrollHandle,
-    /// Whether the window is the panel (`Some(true)`) or the bar.
-    expanded: Option<bool>,
+    /// The window's size (width, height), once set.
+    size: Option<(f32, f32)>,
     /// Clipboard text last auto-pasted, so an unchanged clipboard doesn't
     /// overwrite what was typed since.
     last_auto_paste: Option<String>,
@@ -158,20 +167,23 @@ impl Launcher {
         let mut launcher = Self {
             focus_handle: cx.focus_handle(),
             input,
+            files: Arc::default(),
+            files_bytes: 0,
             list_focus: cx.focus_handle().tab_stop(true),
             candidates: Vec::new(),
             selected: None,
             picked: None,
-            completion_plugin: None,
-            prefer_plugin: None,
+            completion_tool: None,
+            completion_index: 0,
+            prefer_tool: None,
+            history: None,
             views: HashMap::new(),
             stats: InputStats::default(),
             toast: None,
             toast_task: None,
             classify_task: None,
             list_scroll: ScrollHandle::new(),
-            detail_scroll: ScrollHandle::new(),
-            expanded: None,
+            size: None,
             last_auto_paste: None,
             announced_crashes: HashSet::new(),
             _subscriptions: subscriptions,
@@ -184,19 +196,36 @@ impl Launcher {
         self.input.read(cx).text().to_string()
     }
 
-    fn is_expanded(&self, cx: &App) -> bool {
-        !self.input.read(cx).text().trim().is_empty()
+    /// What the tools get: the text and the pasted files.
+    fn input(&self, cx: &App) -> Input {
+        Input::new(self.text(cx)).files(self.files.clone())
     }
 
-    /// The bar while the input is empty, the panel otherwise; it grows down.
+    fn is_expanded(&self, cx: &App) -> bool {
+        !self.input.read(cx).text().trim().is_empty() || !self.files.is_empty()
+    }
+
+    /// The bar while the input is empty, the panel otherwise. The history
+    /// search (⌃R) keeps the width and drops down to the panel's height.
+    fn wanted_size(&self, cx: &App) -> (f32, f32) {
+        if self.history.is_some() {
+            (self.size.map_or(BAR_WIDTH, |(width, _)| width), PANEL_HEIGHT)
+        } else if self.is_expanded(cx) {
+            (PANEL_WIDTH, PANEL_HEIGHT)
+        } else {
+            (BAR_WIDTH, BAR_HEIGHT)
+        }
+    }
+
+    /// Resizes the window to [`Self::wanted_size`]; it grows down.
     fn sync_window_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let expanded = self.is_expanded(cx);
-        if self.expanded == Some(expanded) {
+        let size = self.wanted_size(cx);
+        if self.size == Some(size) {
             return;
         }
-        let animate = self.expanded.is_some();
-        self.expanded = Some(expanded);
-        let (width, height) = if expanded { (PANEL_WIDTH, PANEL_HEIGHT) } else { (BAR_WIDTH, BAR_HEIGHT) };
+        let animate = self.size.is_some();
+        self.size = Some(size);
+        let (width, height) = size;
         let radius = self.corner_radius();
         // Never resize mid-frame: GPUI would miss the resize.
         cx.defer_in(window, move |_, window, _| {
@@ -205,9 +234,9 @@ impl Launcher {
         });
     }
 
-    /// A pill for the bar, a rounded panel once expanded.
+    /// A pill for the bar, rounded corners once it's taller.
     fn corner_radius(&self) -> f32 {
-        if self.expanded == Some(true) { PANEL_RADIUS } else { BAR_RADIUS }
+        if self.size.is_some_and(|(_, height)| height > BAR_HEIGHT) { PANEL_RADIUS } else { BAR_RADIUS }
     }
 
     // -------------------------------------------------------------------------
@@ -217,7 +246,7 @@ impl Launcher {
     fn on_input_event(&mut self, event: &EditorEvent, cx: &mut Context<Self>) {
         match event {
             EditorEvent::Changed => self.input_changed(cx),
-            EditorEvent::CompletionAccepted => self.prefer_plugin = self.completion_plugin.take(),
+            EditorEvent::CompletionAccepted => self.prefer_tool = self.completion_tool.take(),
             EditorEvent::Focus | EditorEvent::Blur => {}
         }
     }
@@ -225,9 +254,10 @@ impl Launcher {
     fn input_changed(&mut self, cx: &mut Context<Self>) {
         let text = self.text(cx);
         self.stats = InputStats::of(&text);
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.files.is_empty() {
             self.picked = None;
         }
+        self.completion_index = 0;
         self.show_completion(&text, cx);
         self.classify(cx);
         cx.notify();
@@ -236,16 +266,32 @@ impl Launcher {
     /// Offers how a remembered input would complete `text` (Tab accepts).
     fn show_completion(&mut self, text: &str, cx: &mut Context<Self>) {
         let state = cx.global::<AppState>();
-        let completion = if state.settings.input_history { state.input_history.completion_for(text) } else { None };
-        self.completion_plugin = completion.map(|c| c.plugin_id.to_string());
+        let (history, index) = (&state.input_history, self.completion_index);
+        let completion = if state.settings.input_history { history.completion_for(text, index) } else { None };
+        self.completion_tool = completion.map(|c| (c.plugin_id.to_string(), c.operation_id.to_string()));
         let remainder = completion.map(|c| SharedString::from(c.remainder.to_string()));
         self.input.update(cx, |input, cx| input.set_completion(remainder, cx));
+    }
+
+    /// Completes with an older (`by` 1) or newer (-1) remembered input, if
+    /// there's one.
+    fn step_completion(&mut self, by: isize, cx: &mut Context<Self>) {
+        let Some(index) = self.completion_index.checked_add_signed(by) else {
+            return;
+        };
+        let text = self.text(cx);
+        if cx.global::<AppState>().input_history.completion_for(&text, index).is_some() {
+            self.completion_index = index;
+            self.show_completion(&text, cx);
+        }
     }
 
     /// Replaces the input with the clipboard's text, if it changed since the
     /// last time (and isn't blank or huge).
     fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else { return };
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
         let unchanged = self.last_auto_paste.as_ref() == Some(&text);
         if text.trim().is_empty() || text.len() > AUTO_PASTE_MAX_BYTES || unchanged {
             return;
@@ -255,8 +301,53 @@ impl Launcher {
     }
 
     fn clear_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_files(Vec::new(), cx);
         self.input.update(cx, |input, cx| input.set_text("", cx));
         window.focus(&self.input.focus_handle(cx));
+    }
+
+    /// ⌘V in the input with files on the clipboard: adds them to the input's
+    /// files (the text stays). `false` if there are none: the input pastes text.
+    fn paste_files(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        if !self.input.focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let pasted = platform::files_on_clipboard();
+        if pasted.is_empty() {
+            return false;
+        }
+        let mut files = self.files.to_vec();
+        files.extend(pasted.into_iter().filter(|path| !self.files.contains(path)));
+        self.set_files(files, cx);
+        true
+    }
+
+    /// Backspace in an empty input removes the last file. `false` if it
+    /// doesn't: the input handles it.
+    fn backspace_file(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let input = self.input.read(cx);
+        if !input.focus_handle(cx).is_focused(window) || !input.text().is_empty() || self.files.is_empty() {
+            return false;
+        }
+        self.remove_file(self.files.len() - 1, cx);
+        true
+    }
+
+    fn remove_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        let mut files = self.files.to_vec();
+        if index < files.len() {
+            files.remove(index);
+            self.set_files(files, cx);
+        }
+    }
+
+    fn set_files(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+        if *self.files == *files {
+            return;
+        }
+        self.files_bytes = files.iter().filter_map(|path| std::fs::metadata(path).ok()).map(|m| m.len()).sum();
+        self.files = files.into();
+        self.input_changed(cx);
     }
 
     // -------------------------------------------------------------------------
@@ -265,7 +356,7 @@ impl Launcher {
 
     /// Asks every tool about the input, in the background, once typing pauses.
     fn classify(&mut self, cx: &mut Context<Self>) {
-        let input = Input::new(self.text(cx));
+        let input = self.input(cx);
         let state = cx.global::<AppState>();
         let (registry, disabled) = (state.registry.clone(), state.settings.disabled_plugins.clone());
         self.classify_task = Some(cx.spawn(async move |this, cx| {
@@ -276,16 +367,22 @@ impl Launcher {
     }
 
     /// Lists the tools and keeps the selection: the picked tool, else the
-    /// best suggestion, else nothing.
+    /// best recommendation, else nothing.
     fn show_candidates(&mut self, candidates: Vec<Candidate>, cx: &mut Context<Self>) {
         self.candidates = candidates;
-        if let Some(plugin_id) = self.prefer_plugin.take()
-            && let Some(candidate) = self.candidates.iter().find(|c| c.plugin_id == plugin_id)
+        // The remembered input's tool; its plugin's first tool if it isn't
+        // listed (or the input was remembered without its operation).
+        if let Some(tool) = self.prefer_tool.take()
+            && let Some(candidate) = self
+                .candidates
+                .iter()
+                .find(|c| c.key() == tool)
+                .or_else(|| self.candidates.iter().find(|c| c.plugin_id == tool.0))
         {
             self.picked = Some(candidate.key());
         }
         let picked = self.picked.as_ref().and_then(|key| self.candidates.iter().position(|c| &c.key() == key));
-        let best = self.candidates.first().filter(|c| c.suggested()).map(|_| 0);
+        let best = self.candidates.first().filter(|c| c.recommended()).map(|_| 0);
         self.selected = picked.or(best);
         self.announce_crashes(cx);
         self.update_selected_view(cx);
@@ -304,7 +401,6 @@ impl Launcher {
         self.selected = Some(index);
         self.picked = Some(self.candidates[index].key());
         self.list_scroll.scroll_to_item(index);
-        self.detail_scroll.set_offset(point(px(0.), px(0.)));
         self.update_selected_view(cx);
         cx.notify();
     }
@@ -346,7 +442,9 @@ impl Launcher {
     /// Typing while the tool list has focus goes on in the input.
     fn on_list_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
-        let Some(text) = keystroke.key_char.clone() else { return };
+        let Some(text) = keystroke.key_char.clone() else {
+            return;
+        };
         if keystroke.modifiers.platform || keystroke.modifiers.control {
             return;
         }
@@ -371,9 +469,13 @@ impl Launcher {
 
     /// Tells the selected tool's view what the input is now.
     fn update_selected_view(&mut self, cx: &mut Context<Self>) {
-        let Some(view) = self.selected_view(cx) else { return };
-        let Some(candidate) = self.selected_candidate() else { return };
-        let context = ToolContext::new(candidate.operation_id.clone(), Input::new(self.text(cx)));
+        let Some(view) = self.selected_view(cx) else {
+            return;
+        };
+        let Some(candidate) = self.selected_candidate() else {
+            return;
+        };
+        let context = ToolContext::new(candidate.operation_id.clone(), self.input(cx));
         view.update(&context, cx);
     }
 
@@ -405,9 +507,9 @@ impl Launcher {
     // Footer actions
     // -------------------------------------------------------------------------
 
-    /// The selected tool's footer actions with their keys. An action's own
+    /// The selected tool's footer actions with their keys. An action's
     /// shortcut gives way to the keymap where the focus is.
-    fn keyed_actions(&self, window: &Window, cx: &App) -> Vec<(Action, ActionKey)> {
+    fn keyed_actions(&self, window: &Window, cx: &App) -> Vec<(Action, Option<Keystroke>)> {
         let Some(view) = self.selected_candidate().and_then(|c| self.views.get(&c.key())) else {
             return Vec::new();
         };
@@ -418,51 +520,25 @@ impl Launcher {
         footer::keyed(view.actions(cx), is_bound)
     }
 
-    /// The keystroke that runs a footer action, if any.
-    fn keystroke_for(&self, key: &ActionKey, window: &Window) -> Option<Keystroke> {
-        match key {
-            ActionKey::Numbered(n) => delight_ui::keystroke_for(&RunAction(*n), window),
-            ActionKey::Own(keystroke) => Some(keystroke.clone()),
-        }
-    }
-
-    fn run_action(&mut self, key: ActionKey, window: &Window, cx: &mut Context<Self>) {
-        if let Some((action, _)) = self.keyed_actions(window, cx).into_iter().find(|(_, k)| *k == key) {
-            self.perform(action, cx);
-        }
-    }
-
-    /// Runs the footer action whose own shortcut was pressed (the keymap
-    /// had no binding for it).
+    /// Runs the footer action whose shortcut was pressed (the keymap had no
+    /// binding for it).
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let pressed = &event.keystroke;
-        let hit = self.keyed_actions(window, cx).into_iter().find(|(_, key)| match key {
-            ActionKey::Own(own) => footer::matches(own, pressed),
-            ActionKey::Numbered(_) => false,
-        });
+        let hit = self
+            .keyed_actions(window, cx)
+            .into_iter()
+            .find(|(_, key)| key.as_ref().is_some_and(|own| footer::matches(own, pressed)));
         if let Some((action, _)) = hit {
             cx.stop_propagation();
             self.perform(action, cx);
         }
     }
 
+    /// Runs a footer action: the tool's view does what it's for.
     fn perform(&mut self, action: Action, cx: &mut Context<Self>) {
-        match action.kind {
-            ActionKind::Copy { text } => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                self.flash(format!("{} — copied to clipboard", action.label), cx);
-                if state::settings(cx).hide_after_copy {
-                    cx.defer(hide);
-                }
-            }
-            ActionKind::OpenUrl { url } => cx.open_url(&url),
-            ActionKind::Custom => {
-                let view = self.selected_candidate().and_then(|c| self.views.get(&c.key())).cloned();
-                if let Some(view) = view {
-                    view.perform(&action.id, cx);
-                }
-            }
-            _ => log::warn!("unknown action kind for {:?}", action.id),
+        let view = self.selected_candidate().and_then(|c| self.views.get(&c.key())).cloned();
+        if let Some(view) = view {
+            view.perform(&action.id, cx);
         }
     }
 

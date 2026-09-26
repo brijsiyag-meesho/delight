@@ -91,6 +91,7 @@ pub fn hide(cx: &mut App) {
     let Some(handle) = handle(cx) else { return };
     let text = handle.update(cx, |launcher, window, cx| {
         platform::hide_window(window);
+        launcher.close_history(window, cx);
         launcher.text(cx)
     });
     let state = cx.global_mut::<AppState>();
@@ -127,9 +128,13 @@ pub fn plugins_reloaded(cx: &mut App) {
     }
 }
 
-/// Replaces the input (for plugins, through the host).
+/// Replaces the input's text and drops its files (for plugins, through the
+/// host).
 pub fn set_input(cx: &mut App, text: SharedString) {
     if let Some(handle) = handle(cx) {
-        let _ = handle.update(cx, |launcher, _, cx| launcher.input.update(cx, |input, cx| input.set_text(text, cx)));
+        let _ = handle.update(cx, |launcher, _, cx| {
+            launcher.set_files(Vec::new(), cx);
+            launcher.input.update(cx, |input, cx| input.set_text(text, cx));
+        });
     }
 }

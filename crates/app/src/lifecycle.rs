@@ -1,8 +1,48 @@
 //! Quitting and restarting — cleanly, or after a plugin crash that left GPUI
 //! unusable.
 
+use std::fs::{File, OpenOptions, TryLockError};
+use std::io::Write as _;
+
+use anyhow::bail;
 use delight_core::Settings;
 use gpui::App;
+
+/// Makes this the only Delight running: locks `delight.lock` in Delight's
+/// folder while the process runs (the system releases it when the process
+/// ends, however it ends). Two would both answer the launcher shortcut and
+/// fight over whose launcher is in front, so it never closes. The error
+/// says which process is running already.
+pub fn claim_single_instance() -> anyhow::Result<File> {
+    let path = Settings::instance_lock_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut file = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+    match file.try_lock() {
+        Ok(()) => {
+            file.set_len(0)?;
+            write!(file, "{}", std::process::id())?;
+            Ok(file)
+        }
+        Err(TryLockError::WouldBlock) => {
+            let pid = std::fs::read_to_string(&path).unwrap_or_default();
+            bail!("Delight is already running (process {})", pid.trim())
+        }
+        Err(TryLockError::Error(e)) => Err(e.into()),
+    }
+}
+
+/// The process id of the Delight holding `delight.lock`, if one is running.
+pub fn running_instance() -> Option<u32> {
+    let path = Settings::instance_lock_path();
+    let file = File::open(&path).ok()?;
+    match file.try_lock() {
+        // Free: nobody's running (the lock goes with `file`).
+        Ok(()) => None,
+        Err(_) => std::fs::read_to_string(&path).ok()?.trim().parse().ok(),
+    }
+}
 
 /// A clean exit: the input is kept for the next launch (if the history is
 /// on), and the next launch shows no crash note.

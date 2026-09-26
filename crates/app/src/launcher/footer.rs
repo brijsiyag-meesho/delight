@@ -1,37 +1,23 @@
-//! The footer's actions and the keys that run them. An action's own
-//! shortcut runs it, unless the keymap already binds that key where the
-//! focus is (the keymap wins). The other actions are numbered, the primary
-//! one first, and `launcher::RunAction(n)` runs the nth: ↵ for 1 and ⌥2… for
-//! the rest in the default keymap.
+//! The footer's actions and the keys that run them: each action's own
+//! shortcut, in the tool's order. A shortcut the keymap already binds where
+//! the focus is (the keymap wins), or an earlier action's, is dropped: that
+//! action is only clicked.
 
 use delight_sdk::Action;
 use gpui::Keystroke;
 
-/// The key that runs a footer action.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ActionKey {
-    /// Run by `launcher::RunAction(n)`, from 1.
-    Numbered(usize),
-    /// The action's own keystroke, e.g. `cmd-enter`.
-    Own(Keystroke),
-}
-
-/// The actions with their keys, the primary one first. An own shortcut that
-/// doesn't parse, or that `is_bound` in the keymap, gets a number instead.
-pub fn keyed(mut actions: Vec<Action>, is_bound: impl Fn(&Keystroke) -> bool) -> Vec<(Action, ActionKey)> {
-    if let Some(i) = actions.iter().position(|a| a.primary) {
-        let primary = actions.remove(i);
-        actions.insert(0, primary);
-    }
-    let mut next = 1;
+/// The actions, in order, each with the key that runs it (`None`: clicked).
+pub fn keyed(actions: Vec<Action>, is_bound: impl Fn(&Keystroke) -> bool) -> Vec<(Action, Option<Keystroke>)> {
+    let mut taken: Vec<Keystroke> = Vec::new();
     actions
         .into_iter()
         .map(|action| {
-            let own = action.shortcut.as_deref().and_then(|s| Keystroke::parse(s).ok()).filter(|k| !is_bound(k));
-            let key = own.map(ActionKey::Own).unwrap_or_else(|| {
-                next += 1;
-                ActionKey::Numbered(next - 1)
-            });
+            let key = action
+                .shortcut
+                .as_deref()
+                .and_then(|s| Keystroke::parse(s).ok())
+                .filter(|k| !is_bound(k) && !taken.iter().any(|t| matches(t, k)));
+            taken.extend(key.clone());
             (action, key)
         })
         .collect()
@@ -46,37 +32,39 @@ pub fn matches(own: &Keystroke, pressed: &Keystroke) -> bool {
 mod tests {
     use super::*;
 
-    fn keys(actions: Vec<Action>, bound: &[&str]) -> Vec<(String, ActionKey)> {
+    fn keys(actions: Vec<Action>, bound: &[&str]) -> Vec<(String, Option<Keystroke>)> {
         let bound: Vec<Keystroke> = bound.iter().map(|k| Keystroke::parse(k).unwrap()).collect();
         let is_bound = |k: &Keystroke| bound.iter().any(|b| matches(b, k));
         keyed(actions, is_bound).into_iter().map(|(a, k)| (a.id, k)).collect()
     }
 
-    fn own(keystroke: &str) -> ActionKey {
-        ActionKey::Own(Keystroke::parse(keystroke).unwrap())
+    fn key(keystroke: &str) -> Option<Keystroke> {
+        Some(Keystroke::parse(keystroke).unwrap())
     }
 
     #[test]
-    fn primary_first_numbered_own_shortcuts_stay() {
+    fn keeps_the_order_and_own_keys() {
         let actions = vec![
-            Action::custom("a", "A"),
-            Action::custom("delete", "Delete").shortcut("cmd-shift-backspace"),
-            Action::custom("b", "B").primary(),
-            Action::custom("c", "C"),
+            Action::new("copy", "Copy").shortcut("enter"),
+            Action::new("open", "Open"),
+            Action::new("delete", "Delete").shortcut("cmd-shift-backspace"),
         ];
         let expected = [
-            ("b".to_string(), ActionKey::Numbered(1)),
-            ("a".to_string(), ActionKey::Numbered(2)),
-            ("delete".to_string(), own("cmd-shift-backspace")),
-            ("c".to_string(), ActionKey::Numbered(3)),
+            ("copy".to_string(), key("enter")),
+            ("open".to_string(), None),
+            ("delete".to_string(), key("cmd-shift-backspace")),
         ];
         assert_eq!(keys(actions, &[]), expected);
     }
 
     #[test]
-    fn keymap_wins_over_an_own_shortcut() {
-        let actions = vec![Action::custom("a", "A").shortcut("cmd-k"), Action::custom("b", "B").shortcut("cmd-enter")];
-        let expected = [("a".to_string(), ActionKey::Numbered(1)), ("b".to_string(), own("cmd-enter"))];
+    fn the_keymap_and_earlier_actions_win() {
+        let actions = vec![
+            Action::new("a", "A").shortcut("cmd-k"),
+            Action::new("b", "B").shortcut("enter"),
+            Action::new("c", "C").shortcut("enter"),
+        ];
+        let expected = [("a".to_string(), None), ("b".to_string(), key("enter")), ("c".to_string(), None)];
         assert_eq!(keys(actions, &["cmd-k"]), expected);
     }
 

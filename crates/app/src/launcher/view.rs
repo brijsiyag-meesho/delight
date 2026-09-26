@@ -2,18 +2,22 @@
 //! selected tool and the footer.
 
 use delight_ui::{
-    ActiveTheme, Button, Caption, Divider, Icon, IconButton, IconName, Keycap, KeycapStyle, LogoBadge, Theme, h_flex,
-    keystroke_label, v_flex,
+    ActiveTheme, Button, Caption, Divider, Icon, IconButton, IconName, Keycap, KeycapStyle, LogoBadge, Theme, Tooltip,
+    h_flex, keystroke_label, v_flex,
 };
 use gpui::{
     AnyElement, Context, FocusHandle, Focusable, FontWeight, IntoElement, MouseButton, ParentElement, Render, Styled, Window, div,
     prelude::*, px,
 };
 
-use super::footer::ActionKey;
+use delight_core::stats::human_bytes;
+use delight_ui::editor::actions as editor;
+
+use super::history;
 use super::{
     BAR_HEIGHT, BAR_ICON_GAP, BAR_ICON_SIZE, BAR_PADDING_X, CONTEXT, ClearInput, Dismiss, FocusNext, FocusPrevious,
-    FocusTool, FocusTools, Launcher, OpenSettings, RunAction, SelectNext, SelectPrevious, SelectTool, TOOL_LIST_CONTEXT, hide,
+    FocusTool, FocusTools, Launcher, NewerCompletion, OlderCompletion, OpenSettings, SelectNext, SelectPrevious,
+    SelectTool, TOOL_LIST_CONTEXT, hide,
 };
 use delight_ui::theme::INPUT_LINE_HEIGHT;
 
@@ -61,16 +65,34 @@ impl Render for Launcher {
             .on_action(cx.listener(|this, _: &FocusTool, window, cx| this.focus_tool(window, cx)))
             .on_action(cx.listener(|this, _: &SelectPrevious, window, cx| this.select_previous(window, cx)))
             .on_action(cx.listener(|this, _: &SelectNext, _, cx| this.select_next(cx)))
+            .on_action(cx.listener(|this, _: &OlderCompletion, _, cx| this.step_completion(1, cx)))
+            .on_action(cx.listener(|this, _: &NewerCompletion, _, cx| this.step_completion(-1, cx)))
             .on_action(cx.listener(|this, SelectTool(n): &SelectTool, _, cx| {
                 if let Some(index) = n.checked_sub(1) {
                     this.select(index, cx);
                 }
             }))
-            .on_action(cx.listener(|this, RunAction(n): &RunAction, window, cx| {
-                this.run_action(ActionKey::Numbered(*n), window, cx)
+            .on_action(cx.listener(|this, _: &history::Search, window, cx| this.open_history(window, cx)))
+            .on_action(cx.listener(|this, _: &history::SelectNext, _, cx| this.move_in_history(1, cx)))
+            .on_action(cx.listener(|this, _: &history::SelectPrevious, _, cx| this.move_in_history(-1, cx)))
+            .on_action(cx.listener(|this, _: &history::Confirm, window, cx| this.confirm_history(None, window, cx)))
+            .on_action(cx.listener(|this, _: &history::Cancel, window, cx| this.close_history(window, cx)))
+            // Before the input sees them: ⌘V pastes files, Backspace removes one.
+            .capture_action(cx.listener(|this, _: &editor::Paste, window, cx| {
+                if this.paste_files(window, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &editor::Backspace, window, cx| {
+                if this.backspace_file(window, cx) {
+                    cx.stop_propagation();
+                }
             }))
             .on_key_down(cx.listener(Self::on_key_down))
             .child(self.render_bar(cx));
+        if let Some(history) = &self.history {
+            return root.child(Divider::horizontal()).child(self.render_history(history, &t, cx));
+        }
         if !self.is_expanded(cx) {
             return root;
         }
@@ -95,8 +117,14 @@ impl Launcher {
         // down. Icon and clear button stay centred on that first line.
         let line = px(INPUT_LINE_HEIGHT);
         let on_first_line = |element: AnyElement| h_flex().h(line).flex_shrink_0().child(element);
-        let icon = Icon::new(IconName::Zap).size(px(BAR_ICON_SIZE)).color(cx.theme().colors.secondary_label);
+        // While searching the history, its search input takes the input's place.
+        let (icon, input) = match &self.history {
+            Some(history) => (history::icon(cx), history.query.clone()),
+            None => (Icon::new(IconName::Zap).color(cx.theme().colors.secondary_label), self.input.clone()),
+        };
+        let icon = icon.size(px(BAR_ICON_SIZE));
         h_flex()
+            .when(self.history.is_some(), |bar| bar.key_context(history::CONTEXT))
             .flex_shrink_0()
             .items_start()
             .min_h(px(BAR_HEIGHT))
@@ -104,24 +132,70 @@ impl Launcher {
             .px(px(BAR_PADDING_X))
             .gap(px(BAR_ICON_GAP))
             // The bolt is a handle for moving the window.
-            .child(on_first_line(icon.into_any_element()).on_mouse_down(MouseButton::Left, |_, window, _| {
-                platform::drag_window(window)
-            }))
-            .child(div().flex_1().min_w(px(0.)).child(self.input.clone()))
-            .when(expanded, |bar| {
+            .child(
+                on_first_line(icon.into_any_element())
+                    .on_mouse_down(MouseButton::Left, |_, window, _| platform::drag_window(window)),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .gap(px(8.))
+                    .child(input)
+                    .when(self.history.is_none() && !self.files.is_empty(), |column| {
+                        column.child(self.render_files(cx))
+                    }),
+            )
+            .when(expanded && self.history.is_none(), |bar| {
                 let clear = IconButton::new("clear", IconName::CircleX)
                     .on_click(cx.listener(|this, _, window, cx| this.clear_input(window, cx)));
                 bar.child(on_first_line(clear.into_any_element()))
             })
     }
 
-    /// Suggested tools, then the other tools that fit less well. The
+    /// The pasted files, as tags: icon, name, and ✕ to remove it.
+    fn render_files(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let t = cx.theme().clone();
+        let tags = self.files.iter().enumerate().map(|(i, path)| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let icon = if path.is_dir() { IconName::Folder } else { IconName::File };
+            let hover = t.colors.hover;
+            h_flex()
+                .id(("file", i))
+                .h(px(26.))
+                .pl(px(8.))
+                .pr(px(4.))
+                .gap(px(6.))
+                .rounded(t.metrics.radius_sm)
+                .bg(t.colors.fill)
+                .text_size(t.text.size_sm)
+                .tooltip(Tooltip::text(path.display().to_string()))
+                .child(Icon::new(icon).size(px(14.)).color(t.colors.secondary_label))
+                .child(div().max_w(px(220.)).truncate().child(name))
+                .child(
+                    div()
+                        .id(("remove-file", i))
+                        .p(px(3.))
+                        .rounded(t.metrics.radius_sm)
+                        .cursor_pointer()
+                        .hover(move |s| s.bg(hover))
+                        .on_click(cx.listener(move |this, _, _, cx| this.remove_file(i, cx)))
+                        .child(Icon::new(IconName::X).size(px(12.)).color(t.colors.secondary_label)),
+                )
+        });
+        h_flex().flex_wrap().gap(px(6.)).children(tags)
+    }
+
+    /// Recommended tools, then the other tools that fit less well. The
     /// selection is the accent colour while the list has focus, grey
     /// otherwise (as in macOS lists).
     fn render_list(&self, t: &Theme, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focused = self.list_focus.is_focused(window);
         let section = |label: &'static str| div().px(px(14.)).py(px(4.)).child(Caption::new(label));
-        let suggested = self.candidates.iter().take_while(|c| c.suggested()).count();
+        let recommended = self.candidates.iter().take_while(|c| c.recommended()).count();
         let mut list = v_flex()
             .id("tools")
             .key_context(TOOL_LIST_CONTEXT)
@@ -133,16 +207,23 @@ impl Launcher {
             .overflow_y_scroll()
             .track_scroll(&self.list_scroll)
             .py(px(6.));
-        list = if suggested == 0 {
+        list = if recommended == 0 {
             list.child(
-                div().px(px(14.)).py(px(6.)).text_size(t.text.size_sm).text_color(t.colors.tertiary_label).child("No suggestions for this input"),
+                div()
+                    .px(px(14.))
+                    .py(px(6.))
+                    .text_size(t.text.size_sm)
+                    .text_color(t.colors.tertiary_label)
+                    .child("No recommendations for this input"),
             )
         } else {
-            list.child(section("Suggested"))
+            list.child(section("Recommended"))
         };
         for (i, candidate) in self.candidates.iter().enumerate() {
-            if i == suggested {
-                list = list.child(div().mx(px(14.)).my(px(6.)).child(Divider::horizontal())).child(section("Other Tools"));
+            if i == recommended {
+                list = list
+                    .child(div().mx(px(14.)).my(px(6.)).child(Divider::horizontal()))
+                    .child(section("Other Matches"));
             }
             let selected = self.selected == Some(i);
             let on_accent = selected && focused;
@@ -184,16 +265,7 @@ impl Launcher {
 
     /// The selected tool: its name, then its own view.
     fn render_detail(&mut self, t: &Theme, cx: &mut Context<Self>) -> impl IntoElement {
-        let pane = v_flex()
-            .id("detail")
-            .flex_1()
-            .min_w(px(0.))
-            .h_full()
-            .overflow_y_scroll()
-            .track_scroll(&self.detail_scroll)
-            .gap(px(14.))
-            .px(px(18.))
-            .py(px(14.));
+        let pane = v_flex().id("detail").flex_1().min_w(px(0.)).h_full().gap(px(14.)).px(px(18.)).py(px(14.));
         let Some(candidate) = self.selected_candidate().cloned() else {
             return pane.child(self.render_empty(t));
         };
@@ -230,11 +302,12 @@ impl Launcher {
             return pane.child(error_notice(t, text));
         }
         match self.selected_view(cx) {
-            Some(view) => pane.child(PanicBoundary::new(
+            // The rest of the pane's height; the view scrolls itself.
+            Some(view) => pane.child(v_flex().flex_1().min_h(px(0.)).overflow_hidden().child(PanicBoundary::new(
                 view.view().into_any_element(),
                 candidate.plugin_id.clone(),
                 candidate.plugin_name.clone(),
-            )),
+            ))),
             None => pane,
         }
     }
@@ -267,14 +340,20 @@ impl Launcher {
                 .into_any_element(),
             None => {
                 let s = &self.stats;
-                let text = format!(
-                    "{}  ·  {}  ·  {}  ·  {}",
-                    s.human_size(),
-                    plural(s.lines, "line"),
-                    plural(s.chars, "char"),
-                    plural(s.words, "word")
-                );
-                div().text_color(t.colors.tertiary_label).child(text).into_any_element()
+                let mut parts = Vec::new();
+                if !self.files.is_empty() {
+                    let size = human_bytes(usize::try_from(self.files_bytes).unwrap_or(usize::MAX));
+                    parts.extend([plural(self.files.len(), "file"), size]);
+                }
+                if s.chars > 0 || self.files.is_empty() {
+                    parts.extend([
+                        s.human_size(),
+                        plural(s.lines, "line"),
+                        plural(s.chars, "char"),
+                        plural(s.words, "word"),
+                    ]);
+                }
+                div().text_color(t.colors.tertiary_label).child(parts.join("  ·  ")).into_any_element()
             }
         };
         // Buttons are clicked, not dragged: keep their mouse-downs from the footer.
@@ -285,10 +364,9 @@ impl Launcher {
             }
             let mut button = Button::new(("action", i), action.label.clone())
                 .text()
-                .emphasized(key == ActionKey::Numbered(1))
                 .on_click(cx.listener(move |this, _, _, cx| this.perform(action.clone(), cx)));
-            if let Some(keystroke) = self.keystroke_for(&key, window) {
-                button = button.shortcut(keystroke_label(&keystroke));
+            if let Some(keystroke) = &key {
+                button = button.shortcut(keystroke_label(keystroke));
             }
             actions = actions.child(button);
         }

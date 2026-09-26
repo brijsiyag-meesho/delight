@@ -1,6 +1,7 @@
 //! AppKit calls GPUI doesn't expose: the menu-bar-only app, the launcher's
 //! panel look (a rounded vibrancy backdrop), resizing that keeps the top edge
-//! in place, showing and hiding without closing, and a GPUI focus fix.
+//! in place, showing and hiding without closing, a GPUI focus fix, and files
+//! on the clipboard.
 
 #[cfg(target_os = "macos")]
 pub use mac::*;
@@ -9,18 +10,23 @@ pub use other::*;
 
 #[cfg(target_os = "macos")]
 mod mac {
+    use std::path::{Path, PathBuf};
     use std::sync::OnceLock;
 
+    use anyhow::Context as _;
     use gpui::Window;
     use objc2::rc::Retained;
-    use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
+    use objc2::runtime::{AnyClass, AnyObject, Imp, ProtocolObject, Sel};
     use objc2::{AnyThread, MainThreadMarker, MainThreadOnly, Message, msg_send, sel};
     use objc2_app_kit::{
-        NSAnimatablePropertyContainer, NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy, NSAutoresizingMaskOptions,
-        NSBezierPath, NSColor, NSGlassEffectView, NSImage, NSImageResizingMode, NSView, NSVisualEffectBlendingMode,
-        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
+        NSAnimatablePropertyContainer, NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSApplication,
+        NSApplicationActivationOptions, NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSBezierPath,
+        NSColor, NSGlassEffectView, NSImage, NSImageResizingMode, NSPasteboard, NSPasteboardItem,
+        NSPasteboardTypeFileURL, NSRunningApplication, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial,
+        NSVisualEffectState, NSVisualEffectView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
     };
-    use objc2_foundation::{NSEdgeInsets, NSPoint, NSRect, NSSize, NSString};
+    use objc2_foundation::{NSArray, NSData, NSEdgeInsets, NSPoint, NSRect, NSSize, NSString, NSURL};
+    use objc2_uniform_type_identifiers::{UTType, UTTypeImage};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     fn main_thread() -> Option<MainThreadMarker> {
@@ -40,6 +46,51 @@ mod mac {
     /// The NSWindow behind a GPUI window.
     fn ns_window(window: &Window) -> Option<Retained<NSWindow>> {
         gpui_view(window)?.window()
+    }
+
+    /// Puts the file at `path` on the clipboard as Finder copies a file, and
+    /// an image also as a picture (`bytes`), for apps that paste pictures.
+    pub fn put_file_on_clipboard(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+        put_file_on(&NSPasteboard::generalPasteboard(), path, bytes)
+    }
+
+    pub(super) fn put_file_on(pasteboard: &NSPasteboard, path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+        let item = NSPasteboardItem::new();
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        let url = url.absoluteString().context("the file has no URL")?;
+        // SAFETY: AppKit's constants, only read.
+        let (file_url, image) = unsafe { (NSPasteboardTypeFileURL, UTTypeImage) };
+        item.setString_forType(&url, file_url);
+        let extension = path.extension().map(|e| e.to_string_lossy()).unwrap_or_default();
+        if let Some(kind) = UTType::typeWithFilenameExtension(&NSString::from_str(&extension))
+            && kind.conformsToType(image)
+        {
+            item.setData_forType(&NSData::with_bytes(bytes), &kind.identifier());
+        }
+        pasteboard.clearContents();
+        let written = pasteboard.writeObjects(&NSArray::from_retained_slice(&[ProtocolObject::from_retained(item)]));
+        anyhow::ensure!(written, "the clipboard didn't take the file");
+        Ok(())
+    }
+
+    /// The files on the clipboard (copied in Finder), in order; none if it
+    /// holds something else.
+    pub fn files_on_clipboard() -> Vec<PathBuf> {
+        files_on(&NSPasteboard::generalPasteboard())
+    }
+
+    pub(super) fn files_on(pasteboard: &NSPasteboard) -> Vec<PathBuf> {
+        // SAFETY: AppKit's constant, only read.
+        let file_url = unsafe { NSPasteboardTypeFileURL };
+        let items = pasteboard.pasteboardItems().unwrap_or_default();
+        items
+            .iter()
+            .filter_map(|item| {
+                let url = item.stringForType(file_url)?;
+                let path = NSURL::URLWithString(&url)?.path()?;
+                Some(PathBuf::from(path.to_string()))
+            })
+            .collect()
     }
 
     /// No Dock icon, no app menu — Delight lives in the menu bar only.
@@ -99,11 +150,14 @@ mod mac {
     /// system shadow that follows its shape. (GPUI's own blurred background
     /// keeps macOS's corner radius, not ours.)
     pub fn style_floating_panel(window: &Window, radius: f64) {
-        let (Some(mtm), Some(win)) = (main_thread(), ns_window(window)) else { return };
+        let (Some(mtm), Some(win)) = (main_thread(), ns_window(window)) else {
+            return;
+        };
         // Borderless: GPUI makes a titled window, and macOS draws a titled
         // window's own rounded frame and edge line around our shape. (GPUI's
-        // windows can become key without a title bar.)
-        win.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
+        // windows can become key without a title bar.) Not a non-activating
+        // panel: `present` activates Delight (see there).
+        win.setStyleMask(NSWindowStyleMask::Borderless);
         // Changing the style rebuilds the window's frame and hands the
         // keyboard to the window itself: give it back to GPUI's view, or
         // every key press just beeps.
@@ -204,12 +258,31 @@ mod mac {
         ns_window(window).map(|w| Retained::into_raw(w) as usize)
     }
 
-    /// Brings the window forward as the key window *without* activating the
-    /// app, like Spotlight: the app you were in stays active. Call it outside
-    /// any GPUI update — AppKit calls back into GPUI synchronously.
+    thread_local! {
+        /// The app that was in front when the launcher was shown, to go back
+        /// to when it hides.
+        static PREVIOUS_APP: std::cell::RefCell<Option<Retained<NSRunningApplication>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Brings the window forward as the key window and activates Delight, as
+    /// Raycast and Alfred do: every key goes to the launcher. (A
+    /// non-activating panel, as Spotlight is, leaves the previous app active,
+    /// and macOS sends it the modifier-only keys: double-Shift in Zed.)
+    /// Remembers the app that was in front, for `hide_window`. Call it
+    /// outside any GPUI update — AppKit calls back into GPUI synchronously.
     pub fn present(native_window: usize) {
         // SAFETY: from `native_window`, which kept a +1 reference; taken back here.
-        let Some(win) = (unsafe { Retained::from_raw(native_window as *mut NSWindow) }) else { return };
+        let Some(win) = (unsafe { Retained::from_raw(native_window as *mut NSWindow) }) else {
+            return;
+        };
+        let Some(mtm) = main_thread() else { return };
+        let front = NSWorkspace::sharedWorkspace().frontmostApplication();
+        let current = NSRunningApplication::currentApplication().processIdentifier();
+        if let Some(front) = front.filter(|app| app.processIdentifier() != current) {
+            PREVIOUS_APP.set(Some(front));
+        }
+        NSApplication::sharedApplication(mtm).activate();
         win.orderFrontRegardless();
         win.makeKeyWindow();
     }
@@ -217,16 +290,28 @@ mod mac {
     /// Moves the window with the mouse. Call it from a mouse-down handler
     /// (it uses the mouse-down event AppKit is delivering).
     pub fn drag_window(window: &Window) {
-        let (Some(mtm), Some(win)) = (main_thread(), ns_window(window)) else { return };
+        let (Some(mtm), Some(win)) = (main_thread(), ns_window(window)) else {
+            return;
+        };
         if let Some(event) = NSApplication::sharedApplication(mtm).currentEvent() {
             win.performWindowDragWithEvent(&event);
         }
     }
 
-    /// Hides without closing, so all state survives.
+    /// Hides without closing, so all state survives. If the launcher had
+    /// the keyboard (hidden by Esc, the shortcut or an action), the app that
+    /// was in front before comes back; not if another app was clicked, or
+    /// another Delight window (Settings) took the keyboard.
     pub fn hide_window(window: &Window) {
-        if let Some(win) = ns_window(window) {
-            win.orderOut(None);
+        let (Some(mtm), Some(win)) = (main_thread(), ns_window(window)) else {
+            return;
+        };
+        let had_keyboard = win.isKeyWindow() && NSApplication::sharedApplication(mtm).isActive();
+        win.orderOut(None);
+        if let Some(previous) = PREVIOUS_APP.take()
+            && had_keyboard
+        {
+            previous.activateWithOptions(NSApplicationActivationOptions::empty());
         }
     }
 
@@ -289,8 +374,12 @@ mod mac {
             return;
         }
         for name in [c"GPUIPanel", c"GPUIWindow"] {
-            let Some(class) = AnyClass::get(name) else { continue };
-            let Some(method) = class.instance_method(sel!(windowDidBecomeKey:)) else { continue };
+            let Some(class) = AnyClass::get(name) else {
+                continue;
+            };
+            let Some(method) = class.instance_method(sel!(windowDidBecomeKey:)) else {
+                continue;
+            };
             // Both classes share one GPUI handler: patch each class once.
             let original = method.implementation();
             if !std::ptr::fn_addr_eq(*GPUI_DID_BECOME_KEY.get_or_init(|| original), original) {
@@ -331,7 +420,50 @@ mod other {
     }
     pub fn patch_gpui_focus() {}
     pub fn set_app_appearance(_: Option<bool>) {}
+    pub fn put_file_on_clipboard(_: &std::path::Path, _: &[u8]) -> anyhow::Result<()> {
+        anyhow::bail!("copying files isn't supported here")
+    }
+    pub fn files_on_clipboard() -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
     pub fn uses_liquid_glass() -> bool {
         false
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+
+    use super::mac::{files_on, put_file_on};
+
+    /// On a private pasteboard, so the user's clipboard is left alone.
+    #[test]
+    fn copies_a_file_and_an_image_as_a_picture() {
+        let pasteboard = NSPasteboard::pasteboardWithUniqueName();
+        let dir = std::env::temp_dir().join(format!("delight-clipboard-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let types = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            put_file_on(&pasteboard, &path, bytes).unwrap();
+            let types = pasteboard.types().unwrap();
+            types.iter().map(|t| t.to_string()).collect::<Vec<_>>()
+        };
+        let png = types("image.png", b"\x89PNG fake");
+        assert!(png.contains(&"public.file-url".to_string()), "{png:?}");
+        assert!(png.contains(&"public.png".to_string()), "an image is also a picture: {png:?}");
+        let text = types("notes.txt", b"hello");
+        // macOS adds the legacy file types (`NSFilenamesPboardType`, …) itself.
+        assert!(text.contains(&"public.file-url".to_string()), "{text:?}");
+        assert!(
+            !text.iter().any(|t| t == "public.png" || t == "public.utf8-plain-text"),
+            "other files are files only: {text:?}"
+        );
+        let url = pasteboard.stringForType(&NSString::from_str("public.file-url")).unwrap().to_string();
+        assert!(url.starts_with("file://") && url.ends_with("notes.txt"), "{url}");
+        assert_eq!(files_on(&pasteboard), [dir.join("notes.txt")], "and it reads back");
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
