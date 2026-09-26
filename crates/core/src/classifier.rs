@@ -5,7 +5,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
-use delight_sdk::{Input, SUGGESTED_CONFIDENCE};
+use delight_sdk::{Input, RECOMMENDED_CONFIDENCE};
 
 use crate::registry::{LoadedPlugin, Registry};
 
@@ -42,10 +42,10 @@ impl Candidate {
         (self.plugin_id.clone(), self.operation_id.clone())
     }
 
-    /// Listed under "Suggested" (else "Other Tools"); see
+    /// Listed under "Recommended" (else "Other Matches"); see
     /// [`delight_sdk::Detection::confidence`].
-    pub fn suggested(&self) -> bool {
-        self.confidence >= SUGGESTED_CONFIDENCE
+    pub fn recommended(&self) -> bool {
+        self.confidence >= RECOMMENDED_CONFIDENCE
     }
 }
 
@@ -54,7 +54,7 @@ impl Candidate {
 /// detected it with a confidence above zero; unknown operation ids and
 /// repeated detections (the best one counts) are dropped.
 pub fn classify(input: &Input, registry: &Registry, disabled: &BTreeSet<String>) -> Vec<Candidate> {
-    if input.text.trim().is_empty() {
+    if input.text.trim().is_empty() && input.files.is_empty() {
         return Vec::new();
     }
     // Registry order, for ties: (plugin index, operation index).
@@ -111,12 +111,12 @@ mod tests {
         let disabled = disabled.iter().map(|s| s.to_string()).collect();
         classify(&Input::new(text.to_string()), r, &disabled)
             .into_iter()
-            .map(|c| (c.plugin_id.clone(), c.operation_id.clone(), c.suggested()))
+            .map(|c| (c.plugin_id.clone(), c.operation_id.clone(), c.recommended()))
             .collect()
     }
 
-    fn row(plugin: &str, op: &str, suggested: bool) -> (String, String, bool) {
-        (plugin.into(), op.into(), suggested)
+    fn row(plugin: &str, op: &str, recommended: bool) -> (String, String, bool) {
+        (plugin.into(), op.into(), recommended)
     }
 
     #[test]
@@ -129,7 +129,7 @@ mod tests {
         assert_eq!(
             ranked(&r, "anything", &[]),
             [row("acme.a", "high", true), row("acme.b", "tie", true), row("acme.a", "low", false)],
-            "zero confidence isn't listed; below 0.5 is Other Tools"
+            "zero confidence isn't listed; below 0.5 is Other Matches"
         );
     }
 

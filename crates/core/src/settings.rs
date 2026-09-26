@@ -31,8 +31,6 @@ pub struct Settings {
     pub launcher_shortcut: String,
     /// Hide the launcher when it loses focus (Spotlight behaviour).
     pub hide_on_blur: bool,
-    /// Hide the launcher after a copy action.
-    pub hide_after_copy: bool,
     /// Keep an input history ([`crate::InputHistory`]): the last input comes
     /// back on launch, and inputs plugins remembered complete what's typed
     /// (Tab accepts). Turning it off erases the history.
@@ -56,7 +54,6 @@ impl Default for Settings {
             appearance: Appearance::System,
             launcher_shortcut: DEFAULT_LAUNCHER_SHORTCUT.to_string(),
             hide_on_blur: true,
-            hide_after_copy: false,
             input_history: true,
             paste_clipboard_on_open: false,
             open_at_login: false,
@@ -70,6 +67,11 @@ impl Default for Settings {
 impl Settings {
     pub fn path() -> PathBuf {
         files::app_dir().join("settings.json")
+    }
+
+    /// Locked by the running Delight, so a second one won't start.
+    pub fn instance_lock_path() -> PathBuf {
+        files::app_dir().join("delight.lock")
     }
 
     /// The user's key bindings, over the app's default keymap.
