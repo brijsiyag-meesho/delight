@@ -28,6 +28,8 @@ pub struct AppState {
     pub input_history: InputHistory,
     pub launcher: Option<WindowHandle<Launcher>>,
     pub settings_window: Option<WindowHandle<SettingsWindow>>,
+    /// How rebuilding the plugins for this Delight went: shown in Settings.
+    pub plugin_rebuild: crate::plugin_rebuild::Rebuild,
     /// Keychain secrets read so far, by `(plugin id, key)`. Reading the
     /// Keychain is slow (and can ask for a password), so each is read once.
     /// A `RefCell` because plugins read secrets with a shared `&App`.
@@ -46,6 +48,7 @@ pub fn init(cx: &mut App, settings: Settings) {
         input_history: InputHistory::load(),
         launcher: None,
         settings_window: None,
+        plugin_rebuild: Default::default(),
         secrets: RefCell::default(),
     });
     cx.set_global(HostHandle(Rc::new(AppHost)));

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use delight_sdk::{OperationSpec, Plugin, PluginManifest};
 
 use crate::guard::GuardedPlugin;
-use crate::native;
+use crate::native::{self, LoadError};
 use crate::plugin_store::valid_plugin_id;
 
 /// Where a plugin came from — shown in Settings.
@@ -36,7 +36,7 @@ pub struct Registry {
     /// In load order: later entries replaced earlier ones with the same id.
     plugins: Vec<LoadedPlugin>,
     /// Plugins that failed to load, with why — shown in Settings.
-    pub load_errors: Vec<String>,
+    pub load_errors: Vec<LoadError>,
 }
 
 impl Registry {
@@ -59,20 +59,26 @@ impl Registry {
     /// plugin whose manifest panics, or whose id can't name its storage
     /// (see [`valid_plugin_id`]), becomes a load error.
     pub fn register(&mut self, plugin: Arc<dyn Plugin>, source: PluginSource) {
-        let name = match &source {
-            PluginSource::Builtin => "built-in".to_string(),
-            PluginSource::Installed { path } => path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        let error = |summary: &str, detail: String| match &source {
+            PluginSource::Builtin => LoadError {
+                name: "built-in".into(),
+                path: None,
+                summary: summary.into(),
+                detail,
+                needs_rebuild: false,
+            },
+            PluginSource::Installed { path } => LoadError::new(path, summary, detail),
         };
         let plugin = match GuardedPlugin::new(plugin) {
             Ok(plugin) => plugin,
             Err(message) => {
-                self.load_errors.push(format!("{name}: panicked while loading: {message}"));
+                self.load_errors.push(error("Crashed while loading", message));
                 return;
             }
         };
         let id = plugin.manifest().id.clone();
         if !valid_plugin_id(&id) {
-            self.load_errors.push(format!("{name}: invalid plugin id {id:?} (use letters, digits, `.`, `-`, `_`)"));
+            self.load_errors.push(error("Invalid plugin id", format!("{id:?}: use letters, digits, `.`, `-`, `_`")));
             return;
         }
         self.plugins.retain(|p| p.manifest().id != id);
@@ -117,7 +123,7 @@ mod tests {
         let mut registry = Registry::new();
         registry.register(Arc::new(TestPlugin::new("../escape", "op")), PluginSource::Builtin);
         assert!(registry.plugins().is_empty());
-        assert!(registry.load_errors[0].contains("invalid plugin id"), "{:?}", registry.load_errors);
+        assert!(registry.load_errors[0].summary == "Invalid plugin id", "{:?}", registry.load_errors);
     }
 
     #[test]

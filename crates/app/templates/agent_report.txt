@@ -1,0 +1,40 @@
+The Delight plugin `{{ plugin }}` doesn't load.
+
+Problem: {{ error.summary }}
+Details: {{ error.detail }}
+{%- if let Some(path) = error.path %}
+Plugin file: {{ path.display() }}
+{%- endif %}
+{%- match source %}
+{%- when Some(source) %}
+Source: {{ source.describe() }} (code in {{ source.code().display() }})
+{%- when None %}
+Source: none recorded (it wasn't installed with `delight install`)
+{%- endmatch %}
+{%- if let Some(failure) = failure %}
+Rebuild error: {{ failure.message }}
+{%- if let Some(hint) = failure.hint %}
+Hint: {{ hint }}
+{%- endif %}
+{%- if let Some(log) = failure.log %}
+Build log: {{ log.display() }}
+{%- endif %}
+{%- endif %}
+
+{% match source -%}
+{% when Some(source) -%}
+Reproduce, and check a fix (prints JSON with an error code, message and hint):
+  cd "{{ source.code().display() }}" && delight build -p {{ plugin }} --json
+{% match source -%}
+{% when Source::Git { .. } -%}
+Fix it in its repo ({{ source.describe() }}), then update it in Delight:
+  delight update {{ plugin }} --json --restart
+{% when Source::Folder(folder) -%}
+Once it builds and loads, install it:
+  cd "{{ folder.display() }}" && delight install -p {{ plugin }} --json --restart
+{% endmatch -%}
+{% when None -%}
+Install it from its source (a git repo link or folder):
+  delight install <source> -p {{ plugin }} --json --restart
+{% endmatch -%}
+The Delight and SDK it must be built for: `delight info --json`.

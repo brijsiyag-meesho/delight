@@ -23,6 +23,7 @@ serde_json.workspace = true
 # whole workspace). A plugin built separately then matches the app's SDK.
 # Keep in sync with [workspace.dependencies].
 anyhow.workspace = true
+askama.workspace = true
 base64.workspace = true
 dirs.workspace = true
 env_logger.workspace = true
@@ -41,7 +42,7 @@ sha2.workspace = true
 shlex.workspace = true
 smallvec.workspace = true
 yaml-rust2.workspace = true
-zip.workspace = true
+toml_edit.workspace = true
 tray-icon.workspace = true
 tree-sitter.workspace = true
 tree-sitter-highlight.workspace = true

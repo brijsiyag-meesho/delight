@@ -6,6 +6,7 @@ members = [
     "crates/ui",
     "crates/core",
     "crates/tools",
+    "crates/plugin-manager",
     "crates/app",
 ]
 # The `delight` CLI is its own workspace: a standalone binary, without the
@@ -24,7 +25,10 @@ delight-gpui = { path = "crates/gpui-alias" }
 delight-core = { path = "crates/core" }
 delight-ui = { path = "crates/ui" }
 delight-tools = { path = "crates/tools" }
+delight-plugin-manager = { path = "crates/plugin-manager" }
 anyhow = "=1.0.100"
+# Text templates, compiled and checked at build time (the agent report in Settings).
+askama = { version = "=0.16.1", default-features = false, features = ["derive", "std"] }
 base64 = "=0.22.1"
 dirs = "=5.0.1"
 # Without the `regex` feature: module filters only.
@@ -53,14 +57,14 @@ sha2 = "=0.10.9"
 smallvec = "=1.16.1"
 tray-icon = "=0.25.1"
 # Syntax highlighting for built-in tools (delight-ui), as in Zed.
+# Reading and editing plugin repos' Cargo.toml (delight-plugin-manager).
+toml_edit = "=0.25.15"
 tree-sitter = "=0.25.10"
 tree-sitter-highlight = "=0.25.10"
 tree-sitter-json = "=0.24.8"
 tree-sitter-yaml = "=0.7.2"
 unicode-segmentation = "=1.13.3"
 walkdir = "=2.5.0"
-# Reading plugin .zip files; deflate only (what `delight package` writes).
-zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
 yaml-rust2 = { version = "=0.13.0", default-features = false }
 # The versions tray-icon links.
 objc2 = "=0.6.4"

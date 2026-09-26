@@ -317,6 +317,6 @@ mod tests {
         let mut registry = Registry::new();
         registry.register(Arc::new(NoManifest), PluginSource::Builtin);
         assert!(registry.plugins().is_empty());
-        assert!(registry.load_errors[0].contains("no manifest"), "{:?}", registry.load_errors);
+        assert!(registry.load_errors[0].detail.contains("no manifest"), "{:?}", registry.load_errors);
     }
 }

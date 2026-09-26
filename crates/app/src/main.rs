@@ -6,12 +6,13 @@
 mod boundary;
 mod clipboard;
 mod hotkey;
-mod install;
 mod keymap;
 mod launcher;
 mod lifecycle;
 mod login;
 mod platform;
+mod plugin_rebuild;
+mod sdk_kit;
 mod settings_window;
 mod state;
 mod tray;
@@ -68,6 +69,7 @@ fn main() {
         }
         // After the launcher: it shows what's wrong in keymap.json.
         keymap::init(cx);
+        plugin_rebuild::start_if_needed(cx);
 
         // The launcher shortcut and the menu bar icon are globals: they work
         // while they're alive.
@@ -118,51 +120,58 @@ fn handle_menu_click(command: TrayCommand, cx: &mut App) {
     }
 }
 
-/// Commands for plugin tooling (the `delight` CLI), answered by this exact
-/// app build without starting the UI:
+/// For the `delight` CLI only, not for people: questions it asks this exact
+/// app build, answered without starting the UI. Undocumented on purpose
+/// (the app has no `--help`); people use `delight`.
 ///
-/// * `--sdk-build-id` — prints the SDK build plugins must match.
+/// * `--plugin-info` — prints, as JSON, the SDK build plugins must match,
+///   the build profile, the plugins folder, and the process id of the
+///   Delight running now (or `null`).
+/// * `--write-sdk-kit <dir>` — writes the files a plugin build needs to get
+///   this build's SDK (see `sdk_kit`).
 /// * `--check-plugin <dylib>` — loads a plugin like the app does and prints
 ///   its id, or why it can't load.
-/// * `--plugin-dir` — prints the folder this build loads plugins from
-///   (`plugins-debug` for a debug build, or the one set in Settings).
-/// * `--running` — prints the process id of the Delight running now, or
-///   nothing.
 ///
 /// Returns the exit code, or `None` to start the app.
 fn command_line() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     match args[..] {
-        ["--sdk-build-id"] => {
-            println!("{}", delight_sdk::BUILD_ID);
+        ["--plugin-info"] => {
+            let info = serde_json::json!({
+                "sdk_build_id": delight_sdk::BUILD_ID,
+                "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+                "plugin_dir": Settings::load().effective_plugin_dir(),
+                "running": lifecycle::running_instance(),
+            });
+            println!("{info}");
             Some(0)
         }
-        ["--check-plugin", path] => Some(check_plugin(path)),
-        ["--plugin-dir"] => {
-            println!("{}", Settings::load().effective_plugin_dir().display());
-            Some(0)
-        }
-        ["--running"] => {
-            if let Some(pid) = lifecycle::running_instance() {
-                println!("{pid}");
+        ["--write-sdk-kit", dir] => match sdk_kit::write(std::path::Path::new(dir)) {
+            Ok(()) => Some(0),
+            Err(e) => {
+                eprintln!("error: {e:#}");
+                Some(1)
             }
-            Some(0)
-        }
+        },
+        ["--check-plugin", path] => Some(check_plugin(path)),
         _ => None,
     }
 }
 
 fn check_plugin(path: &str) -> i32 {
     // Absolute: the hardened runtime refuses to load from a relative path.
-    let loaded = std::fs::canonicalize(path).map_err(anyhow::Error::from).and_then(|path| delight_core::native::load(&path));
+    let loaded = match std::fs::canonicalize(path) {
+        Ok(path) => delight_core::native::load(&path).map_err(|e| e.to_string()),
+        Err(e) => Err(format!("{path}: {e}")),
+    };
     match loaded {
         Ok(plugin) => {
             println!("ok: {} {}", plugin.manifest().id, plugin.manifest().version);
             0
         }
         Err(e) => {
-            eprintln!("error: {e:#}");
+            eprintln!("error: {e}");
             1
         }
     }

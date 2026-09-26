@@ -3,8 +3,10 @@
 //!
 //! * `general` — Delight's own preferences.
 //! * `plugins` — the plugin list, and each plugin's own settings page.
+//! * `broken` — plugins that don't load, in that list.
 //! * `shortcut_recorder` — the field that records the launcher shortcut.
 
+mod broken;
 mod general;
 mod plugins;
 mod shortcut_recorder;
@@ -113,7 +115,13 @@ impl SettingsWindow {
             }),
             cx.observe_window_appearance(window, |_, _, cx| delight_ui::theme::appearance_changed(cx)),
         ];
-        Self { focus_handle: cx.focus_handle(), tab: Tab::General, page: None, shortcut, _subscriptions: subscriptions }
+        Self {
+            focus_handle: cx.focus_handle(),
+            tab: Tab::General,
+            page: None,
+            shortcut,
+            _subscriptions: subscriptions,
+        }
     }
 
     /// Shows a plugin's page (`Some`), or the current tab (`None`).

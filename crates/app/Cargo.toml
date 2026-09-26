@@ -16,7 +16,9 @@ delight-sdk.workspace = true
 delight-core.workspace = true
 delight-ui.workspace = true
 delight-tools.workspace = true
+delight-plugin-manager.workspace = true
 anyhow.workspace = true
+askama.workspace = true
 dirs.workspace = true
 env_logger.workspace = true
 futures.workspace = true
@@ -32,7 +34,10 @@ serde.workspace = true
 serde_json.workspace = true
 serde_json_lenient.workspace = true
 tray-icon.workspace = true
-zip.workspace = true
+
+[build-dependencies]
+# Embedding the SDK kit (build.rs).
+walkdir.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true

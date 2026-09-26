@@ -4,41 +4,21 @@
 use delight_core::registry::{LoadedPlugin, PluginSource};
 use delight_ui::{ActiveTheme, Button, Icon, IconButton, IconName, LogoBadge, Switch, h_flex, v_flex};
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, ParentElement, PathPromptOptions, PromptLevel, Styled, Window, div,
-    prelude::*, px,
+    AnyElement, ClipboardItem, Context, FontWeight, IntoElement, ParentElement, PromptLevel, Styled, Window, div, prelude::*, px,
 };
 
 use super::{PluginPage, SettingsWindow, section};
 use crate::boundary::PanicBoundary;
 use crate::state::{self, AppState};
-use crate::{install, lifecycle};
+use crate::lifecycle;
 
 impl SettingsWindow {
     pub(super) fn render_plugins(&self, cx: &mut Context<Self>) -> AnyElement {
         let registry = cx.global::<AppState>().registry.clone();
-        let mut rows: Vec<AnyElement> =
-            registry.plugins().iter().enumerate().map(|(i, plugin)| self.plugin_row(i, plugin, cx)).collect();
-        rows.push(self.folder_row(cx));
-        let t = cx.theme();
-        let errors = registry.load_errors.clone();
-        let warning = t.status.warning.clone();
-        v_flex()
-            .gap(px(18.))
-            .child(section("Plugins", rows))
-            .when(!errors.is_empty(), |d| {
-                d.child(
-                    v_flex()
-                        .gap(px(4.))
-                        .px(px(12.))
-                        .py(px(9.))
-                        .rounded(px(8.))
-                        .bg(warning.bg)
-                        .text_size(px(11.5))
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child("Some plugins failed to load"))
-                        .children(errors.into_iter().map(|e| div().text_color(t.colors.secondary_label).child(e))),
-                )
-            })
-            .into_any_element()
+        let mut rows = vec![self.install_row(cx)];
+        rows.extend(registry.plugins().iter().enumerate().map(|(i, plugin)| self.plugin_row(i, plugin, cx)));
+        rows.extend(registry.load_errors.iter().enumerate().map(|(i, error)| self.broken_row(i, error, cx)));
+        v_flex().gap(px(18.)).child(section("Plugins", rows)).into_any_element()
     }
 
     /// Logo, name, what it is, why it's off (if it crashed), then ⚙, 🗑 and
@@ -116,32 +96,33 @@ impl SettingsWindow {
             .into_any_element()
     }
 
-    /// The plugins folder, with Install…, Open Folder and Restart.
-    fn folder_row(&self, cx: &mut Context<Self>) -> AnyElement {
-        let dir = state::settings(cx).effective_plugin_dir();
-        let home = dirs::home_dir().map(|h| h.display().to_string()).unwrap_or_default();
-        let shown = dir.display().to_string().replacen(&home, "~", 1);
+    /// How to install plugins (the `delight` CLI), and Restart.
+    fn install_row(&self, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.theme();
         h_flex()
             .gap(px(8.))
             .px(px(12.))
             .py(px(9.))
-            .child(Icon::new(IconName::Folder).size(px(14.)).color(t.colors.secondary_label))
+            .child(Icon::new(IconName::Puzzle).size(px(14.)).color(t.colors.secondary_label))
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w(px(0.))
-                    .text_size(px(11.5))
-                    .font_family(t.text.mono_font.clone())
-                    .text_color(t.colors.secondary_label)
-                    .truncate()
-                    .child(shown),
+                    .child(div().text_size(px(12.)).child("Install plugins from a terminal"))
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .font_family(t.text.mono_font.clone())
+                            .text_color(t.colors.secondary_label)
+                            .truncate()
+                            .child("delight install <GitHub link or folder>"),
+                    ),
             )
-            .child(Button::new("install", "Install…").on_click(cx.listener(|this, _, window, cx| this.install(window, cx))))
-            .child(Button::new("open-folder", "Open Folder").on_click(move |_, _, cx| {
-                let _ = std::fs::create_dir_all(&dir);
-                cx.open_with_system(&dir);
-            }))
+            .child(
+                IconButton::new("copy-install", IconName::Copy)
+                    .tooltip("Copy command")
+                    .on_click(|_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string("delight install ".into()))),
+            )
             .child(Button::new("restart", "Restart").icon(IconName::RefreshCw).on_click(|_, _, cx| cx.defer(lifecycle::restart)))
             .into_any_element()
     }
@@ -149,13 +130,7 @@ impl SettingsWindow {
     /// The plugin's own settings page, under a header.
     pub(super) fn render_plugin_page(&self, page: &PluginPage, cx: &mut Context<Self>) -> AnyElement {
         let t = cx.theme().clone();
-        let back = div()
-            .id("back")
-            .text_size(px(12.))
-            .text_color(t.colors.accent)
-            .cursor_pointer()
-            .child("‹ All Plugins")
-            .on_click(cx.listener(|this, _, window, cx| this.navigate(None, window, cx)));
+        let back = self.back_link(cx);
         let registry = cx.global::<AppState>().registry.clone();
         let Some(plugin) = registry.get(&page.plugin_id) else {
             return v_flex().gap(px(18.)).child(back).child("This plugin is no longer loaded.").into_any_element();
@@ -179,26 +154,16 @@ impl SettingsWindow {
         v_flex().gap(px(18.)).child(back).child(header).child(body).into_any_element()
     }
 
-    /// Picks a plugin (`.zip` or `.dylib`) and installs it.
-    fn install(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let picked = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Install".into()),
-        });
-        cx.spawn_in(window, async move |_, cx| {
-            let Ok(Ok(Some(paths))) = picked.await else { return };
-            let Some(path) = paths.into_iter().next() else { return };
-            let _ = cx.update(|window, cx| {
-                let (level, title, detail) = match install::install_plugin(cx, &path) {
-                    Ok(message) => (PromptLevel::Info, message, None),
-                    Err(e) => (PromptLevel::Warning, "Couldn't install the plugin".to_string(), Some(format!("{e:#}"))),
-                };
-                let _ = window.prompt(level, &title, detail.as_deref(), &["OK"], cx);
-            });
-        })
-        .detach();
+    /// ‹ All Plugins: back to the Plugins tab.
+    pub(super) fn back_link(&self, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id("back")
+            .text_size(px(12.))
+            .text_color(cx.theme().colors.accent)
+            .cursor_pointer()
+            .child("‹ All Plugins")
+            .on_click(cx.listener(|this, _, window, cx| this.navigate(None, window, cx)))
+            .into_any_element()
     }
 
     fn confirm_delete(&self, plugin_id: String, name: String, window: &mut Window, cx: &mut Context<Self>) {
