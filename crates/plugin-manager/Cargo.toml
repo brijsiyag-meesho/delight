@@ -1,0 +1,16 @@
+[package]
+name = "delight-plugin-manager"
+description = "Plugins installed from source: install, update and rebuild them for a Delight. Shared by the `delight` CLI and the app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Also a path dependency of the CLI, its own workspace: that build takes
+# these versions from Delight's workspace too.
+[dependencies]
+anyhow.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml_edit.workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "delight-cli"
+description = "The `delight` CLI: install Delight plugins from source, keep them updated and built for this Delight."
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "delight"
+path = "src/main.rs"
+
+# Its own workspace (excluded from Delight's): a standalone binary that
+# links std statically. Versions pinned exactly, as in Delight's workspace.
+[workspace]
+
+[dependencies]
+# Install, update and rebuild: shared with the app.
+delight-plugin-manager = { path = "../plugin-manager" }
+anyhow = "=1.0.100"
+clap = { version = "=4.6.7", features = ["derive"] }
+# Picking plugins to install, on a terminal.
+dialoguer = { version = "=0.12.0", default-features = false }
+serde_json = { version = "=1.0.145", features = ["preserve_order"] }
+toml_edit = "=0.25.15"

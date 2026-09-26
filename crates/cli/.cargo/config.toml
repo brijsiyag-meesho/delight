@@ -1,0 +1,4 @@
+# A standalone binary: undo the parent's `-C prefer-dynamic` (target rustflags
+# take precedence over build.rustflags).
+[target.'cfg(all())']
+rustflags = ["-C", "prefer-dynamic=no"]
